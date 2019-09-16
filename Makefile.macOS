@@ -1,9 +1,16 @@
 # Makefile.macOS - Copyright (C) 2019, Jeremy Dilatush.  All rights reserved.
 # Build "sockptyr" code for macOS: make -f Makefile.macOS
 
+USE_INOTIFY=0
 DYL=.dylib
 DYLFLAGS=-dynamiclib -flat_namespace
-CFLAGS=-g -Wall
+CFLAGS=-g -Wall -DUSE_INOTIFY=$(USE_INOTIFY)
+
 sockptyr$(DYL): sockptyr_core.o
 	$(CC) $(DYLFLAGS) -o $@ $^ -lc -ltcl
 sockptyr_core.o: sockptyr_core.c
+
+clean:
+	-rm -f sockptyr_core.o sockptyr$(DYL)
+test:
+	tclsh sockptyr_tests1.tcl ./sockptyr$(DYL) $(USE_INOTIFY)

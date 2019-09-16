@@ -14,6 +14,8 @@
 /* Compile with -DUSE_INOTIFY=1 on Linux to take advantage of inotify(7) */
 #endif
 
+/* XXX add Tcl command to see the USE_INOTIFY & other build information */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,6 +161,11 @@ static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
     struct sockptyr_hdl *hdl;
     char rb[128];
     int fd;
+
+    if (argc != 0) {    
+        Tcl_SetResult(interp, "usage: sockptyr open_pty", TCL_STATIC);
+        return(TCL_ERROR);
+    }
 
     /* get a handle we can use for our result */
     hdl = sockptyr_allocate_handle(sd);
@@ -399,7 +406,7 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     }
     ecount = ((hdl->children[0] ? hdl->children[0]->count : 0) +
               (hdl->children[1] ? hdl->children[1]->count : 0) +
-              (hdl->usage == usage_empty ? 1 : 0));
+              (hdl->usage != usage_empty ? 1 : 0));
     if (hdl->count != ecount && !err[0]) {
         snprintf(err, errsz, "on %d count wrong, got %d exp %d",
                  (int)hdl->num, (int)hdl->count, (int)ecount);
