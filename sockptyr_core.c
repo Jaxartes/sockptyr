@@ -375,10 +375,8 @@ static void sockptyr_init_conn(struct sockptyr_data *sd,
  */
 static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
 {
-    char err[512], buf[512];
+    char err[512];
     struct sockptyr_data *sd = cd;
-    struct sockptyr_hdl *hdl;
-    int num, ecount, i;
 
     Tcl_SetResult(interp, "", TCL_STATIC);
     err[0] = '\0';
@@ -466,8 +464,6 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
 static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[])
 {
-    struct sockptyr_data *sd = cd;
-    struct sockptyr_hdl *hdl;
     char buf[512];
 
     if (argc != 0) {    
