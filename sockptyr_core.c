@@ -73,17 +73,18 @@ struct sockptyr_data {
 static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd);
 static struct sockptyr_hdl *sockptyr_lookup_handle(struct sockptyr_data *sd,
                                                    const char *hdls);
-static int sockptyr_cmd(ClientData d, Tcl_Interp *interp,
+static void sockptyr_cleanup(ClientData cd);
+static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
                         int argc, const char *argv[]);
-static int sockptyr_cmd_open_pty(ClientData d, Tcl_Interp *interp,
+static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
                                  int argc, const char *argv[]);
-static int sockptyr_cmd_monitor_directory(ClientData d, Tcl_Interp *interp,
+static int sockptyr_cmd_monitor_directory(ClientData cd, Tcl_Interp *interp,
                                           int argc, const char *argv[]);
-static int sockptyr_cmd_link(ClientData d, Tcl_Interp *interp,
+static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
-static int sockptyr_cmd_onclose(ClientData d, Tcl_Interp *interp,
+static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
                                 int argc, const char *argv[]);
-static int sockptyr_cmd_dbg_handles(ClientData d, Tcl_Interp *interp);
+static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp);
 static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
                                          struct sockptyr_data *sd,
                                          struct sockptyr_hdl *hdl, int num,
@@ -102,12 +103,13 @@ int Sockptyr_Init(Tcl_Interp *interp)
 {
     struct sockptyr_data *sd;
 
-    sd = ckalloc(sizeof(*sd));
+    sd = (void *)ckalloc(sizeof(*sd));
     memset(sd, 0, sizeof(*sd));
     sd->rhdl = NULL;
 
     Tcl_CreateCommand(interp, "sockptyr",
                       &sockptyr_cmd, sd, &sockptyr_cleanup);
+    return(TCL_OK);
 }
 
 /* sockptyr_cmd() -- handle the "sockptyr" command invoked in Tcl.
@@ -144,38 +146,38 @@ static void sockptyr_cleanup(ClientData cd)
     struct sockptyr_data *sd = cd;
 
     sockptyr_clobber_handle(sd, sd->rhdl, 1);
-    ckfree(sd);
+    ckfree((void *)sd);
 }
 
 /* Tcl command "sockptyr open_pty" -- Open a PTY and return a handle for it
  * and file pathname.
  */
-static int sockptyr_cmd_open_pty(ClientData d, Tcl_Interp *interp,
+static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
                                  int argc, const char *argv[])
 {
     struct sockptyr_data *sd = cd;
-    struct sockptyr_hdl *sh;
-    char rb[128], *pty;
+    struct sockptyr_hdl *hdl;
+    char rb[128];
     int fd;
 
     /* get a handle we can use for our result */
-    sh = sockptyr_allocate_handle(sd);
+    hdl = sockptyr_allocate_handle(sd);
     fd = posix_openpt(O_RDWR | O_NOCTTY);
     if (fd < 0) {
         snprintf(rb, sizeof(rb), "sockptyr open_pty: %s", strerror(errno));
         Tcl_SetResult(interp, rb, TCL_VOLATILE);
         return(TCL_ERROR);
     }
-    sockptyr_init_conn(sd, sh, fd, 'p');
+    sockptyr_init_conn(sd, hdl, fd, 'p');
     
-    /* return a handle string that leads back to 'sh'; and the PTY filename */
+    /* return a handle string that leads back to 'hdl'; and the PTY filename */
     snprintf(rb, sizeof(rb), "%s%d %s",
-             handle_prefix, (int)sh->num, ptsname(fd));
+             handle_prefix, (int)hdl->num, ptsname(fd));
     Tcl_SetResult(interp, rb, TCL_VOLATILE);
     return(TCL_OK);
 }
 
-static int sockptyr_cmd_monitor_directory(ClientData d, Tcl_Interp *interp,
+static int sockptyr_cmd_monitor_directory(ClientData cd, Tcl_Interp *interp,
                                           int argc, const char *argv[])
 {
     struct sockptyr_data *sd = cd;
@@ -184,7 +186,7 @@ static int sockptyr_cmd_monitor_directory(ClientData d, Tcl_Interp *interp,
     return(TCL_ERROR);
 }
 
-static int sockptyr_cmd_link(ClientData d, Tcl_Interp *interp,
+static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[])
 {
     struct sockptyr_data *sd = cd;
@@ -193,7 +195,7 @@ static int sockptyr_cmd_link(ClientData d, Tcl_Interp *interp,
     return(TCL_ERROR);
 }
 
-static int sockptyr_cmd_onclose(ClientData d, Tcl_Interp *interp,
+static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
                                 int argc, const char *argv[])
 {
     struct sockptyr_data *sd = cd;
@@ -234,7 +236,7 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
 
     if (!*hdl) {
         /* allocate a new one */
-        *hdl = ckalloc(sizeof(**hdl));
+        *hdl = (void *)ckalloc(sizeof(**hdl));
         memset(*hdl, 0, sizeof(**hdl));
         (*hdl)->usage = usage_empty;
         (*hdl)->count = 0;
@@ -248,6 +250,8 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
     for (thumb = *hdl; thumb; thumb = thumb->parent) {
         thumb->count++;
     }
+
+    return(*hdl);
 }
 
 /* sockptyr_lookup_handle() -- look up the specified handle, and return
@@ -274,7 +278,7 @@ static struct sockptyr_hdl *sockptyr_lookup_handle(struct sockptyr_data *sd,
     while (hdl && hdln) {
         hdln -= 1;
         branch = hdln & 1;
-        hdln >> 1;
+        hdln >>= 1;
         hdl = hdl->children[branch];
     }
     if (hdl && hdl->usage == usage_empty) {
@@ -305,10 +309,11 @@ static void sockptyr_clobber_handle(struct sockptyr_data *sd,
         sockptyr_clobber_handle(sd, hdl->children[0], rec);
         hdl->children[0] = NULL;
     }
-    if (rec && hdl->children[1])
+    if (rec && hdl->children[1]) {
         sockptyr_clobber_handle(sd, hdl->children[1], rec);
         hdl->children[1] = NULL;
     }
+
     switch (hdl->usage) {
     case usage_empty:
         /* nothing more to do */
@@ -322,16 +327,13 @@ static void sockptyr_clobber_handle(struct sockptyr_data *sd,
                     close(conn->fd);
                     conn->fd = -1;
                 }
-                ckfree(conn);
+                ckfree((void *)conn);
                 hdl->u.u_conn = NULL;
             }
         }
         break;
     case usage_mondir:
         /* XXX */
-        break;
-    case usage_empty:
-        /* nothing to do */
         break;
     default:
         /* shouldn't happen */
@@ -351,7 +353,7 @@ static void sockptyr_init_conn(struct sockptyr_data *sd,
     struct sockptyr_conn *conn;
 
     hdl->usage = usage_conn;
-    hdl->u.u_conn = conn = ckalloc(sizeof(*conn));
+    hdl->u.u_conn = conn = (void *)ckalloc(sizeof(*conn));
     memset(conn, 0, sizeof(*conn));
     conn->fd = fd;
     /* XXX Tcl_CreateFileHandler() probably indirectly */
@@ -362,10 +364,10 @@ static void sockptyr_init_conn(struct sockptyr_data *sd,
  * things like type and links and how they fit together.  For debugging
  * in case the name didn't make that clear.
  */
-static int sockptyr_cmd_dbg_handles(ClientData d, Tcl_Interp *interp)
+static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
 {
     char err[512], buf[512];
-    struct sockptyr_data *sd = d;
+    struct sockptyr_data *sd = cd;
     struct sockptyr_hdl *hdl;
     int num, ecount, i;
 
@@ -395,8 +397,8 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
         snprintf(err, errsz, "num wrong, got %d exp %d",
                  (int)hdl->num, (int)num);
     }
-    ecount = ((hdl->children[0] ? hdl->children[0] : 0) +
-              (hdl->children[1] ? hdl->children[1] : 0) +
+    ecount = ((hdl->children[0] ? hdl->children[0]->count : 0) +
+              (hdl->children[1] ? hdl->children[1]->count : 0) +
               (hdl->usage == usage_empty ? 1 : 0));
     if (hdl->count != ecount && !err[0]) {
         snprintf(err, errsz, "on %d count wrong, got %d exp %d",
