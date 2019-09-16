@@ -55,6 +55,23 @@ for {set i 0} {$i < 10} {incr i} {
 puts stderr "Done"
 
 puts stderr ""
+puts stderr "Linking some of them..."
+set ijs [list]
+lappend ijs 1 2 3 4 ; # will be changed by later links in the same list
+for {set i 0} {$i < [llength $pty_handles] - 1} {incr i 3} {
+    lappend ijs $i [expr {$i + 1}]
+}
+foreach {i j} $ijs {
+    set h1 [lindex $pty_handles $i]
+    set h2 [lindex $pty_handles $j]
+    set p1 [lindex $pty_paths $i]
+    set p2 [lindex $pty_paths $j]
+    puts stderr "\t$p1 ($h1) to $p2 ($h2)"
+    sockptyr link $h1 $h2
+}
+puts stderr "Done"
+
+puts stderr ""
 puts stderr "Running handle debug..."
 array set dbg_handles [sockptyr dbg_handles]
 foreach n [lsort [array names dbg_handles]] {

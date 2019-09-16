@@ -31,7 +31,21 @@ static const char *handle_prefix = "sockptyr_";
 
 struct sockptyr_conn {
     /* connection specific information in sockptyr */
-    int fd;
+    int fd; /* file descriptor; -1 if closed */
+    /* buf* -- buffer for receiving data on this connection
+     *      buf -- the buffer itself
+     *      buf_sz -- size of the buffer in bytes
+     *      buf_empty -- boolean indicating the buffer is empty
+     *      buf_in -- index in buffer where next received data goes
+     *      buf_out -- index in buffer where next used data comes from
+     */
+    unsigned char *buf;
+    int buf_sz, buf_empty, buf_in, buf_out;
+
+    /* two connections can be (& often are) "linked"; the entry 'linked'
+     * points to the connection here
+     */
+    struct sockptyr_hdl *linked;
 };
 
 struct sockptyr_hdl {
@@ -192,17 +206,54 @@ static int sockptyr_cmd_monitor_directory(ClientData cd, Tcl_Interp *interp,
 {
     struct sockptyr_data *sd = cd;
 
-    Tcl_SetResult(interp, "unimplemented", TCL_STATIC);
+    Tcl_SetResult(interp, "unimplemented", TCL_STATIC); /* XXX */
     return(TCL_ERROR);
 }
 
+/* Tcl command "sockptyr link $hdl1 $hdl2" to link two connections together */
 static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[])
 {
     struct sockptyr_data *sd = cd;
+    struct sockptyr_hdl *hdls[2];
+    struct sockptyr_conn *conns[2];
+    int i;
+    char buf[512];
 
-    Tcl_SetResult(interp, "unimplemented", TCL_STATIC);
-    return(TCL_ERROR);
+    if (argc < 1 || argc > 2) {
+        Tcl_SetResult(interp, "usage: sockptyr link $hdl1 ?$hdl2?", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    /* find out what connections we're to operate on */
+    for (i = 0; i < argc; ++i) {
+        hdls[i] = sockptyr_lookup_handle(sd, argv[i]);
+        if (hdls[i] == NULL || hdls[i]->usage != usage_conn) {
+            snprintf(buf, sizeof(buf), "handle %s is not a connection handle",
+                     argv[i]);
+            Tcl_SetResult(interp, buf, TCL_VOLATILE);
+            return(TCL_ERROR);
+        }
+        conns[i] = hdls[i]->u.u_conn;
+    }
+
+    /* unlink them from whatever they were on before */
+    for (i = 0; i < argc; ++i) {
+        if (conns[i]->linked) {
+            conns[i]->linked->u.u_conn->linked = NULL;
+            conns[i]->linked = NULL;
+        }
+    }
+
+    if (argc > 1) {
+        /* link them to each other */
+        conns[0]->linked = hdls[1];
+        conns[1]->linked = hdls[0];
+    }
+
+    /* XXX update event handlers on both connections */
+
+    return(TCL_OK);
 }
 
 static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
@@ -210,7 +261,7 @@ static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
 {
     struct sockptyr_data *sd = cd;
 
-    Tcl_SetResult(interp, "unimplemented", TCL_STATIC);
+    Tcl_SetResult(interp, "unimplemented", TCL_STATIC); /* XXX */
     return(TCL_ERROR);
 }
 
@@ -337,6 +388,11 @@ static void sockptyr_clobber_handle(struct sockptyr_data *sd,
                     close(conn->fd);
                     conn->fd = -1;
                 }
+                if (conn->linked) {
+                    conn->linked->u.u_conn->linked = NULL;
+                    conn->linked = NULL;
+                }
+                ckfree((void *)conn->buf);
                 ckfree((void *)conn);
                 hdl->u.u_conn = NULL;
             }
@@ -366,6 +422,11 @@ static void sockptyr_init_conn(struct sockptyr_data *sd,
     hdl->u.u_conn = conn = (void *)ckalloc(sizeof(*conn));
     memset(conn, 0, sizeof(*conn));
     conn->fd = fd;
+    conn->buf_sz = 4096;
+    conn->buf = (void *)ckalloc(conn->buf_sz);
+    conn->buf_empty = 1;
+    conn->buf_in = conn->buf_out = 0;
+    conn->linked = NULL;
     /* XXX Tcl_CreateFileHandler() probably indirectly */
 }
 
@@ -445,8 +506,56 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     case usage_mondir:  Tcl_AppendElement(interp, "mondir"); break;
     case usage_exec:    Tcl_AppendElement(interp, "exec"); break;
     default:
+        if (!err[0]) {
+            snprintf(err, errsz, "unknown usage value %d", (int)hdl->usage);
+        }
         snprintf(buf, sizeof(buf), "%d", (int)hdl->usage);
         Tcl_AppendElement(interp, buf);
+        break;
+    }
+
+    switch (hdl->usage) {
+    case usage_empty:
+        /* nothing to do */
+        break;
+    case usage_conn:
+        /* connection-specific stuff */
+        {
+            struct sockptyr_conn *conn = hdl->u.u_conn;
+            snprintf(buf, sizeof(buf), "%d fd", (int)hdl->num);
+            Tcl_AppendElement(interp, buf);
+            snprintf(buf, sizeof(buf), "%d", (int)conn->fd);
+            Tcl_AppendElement(interp, buf);
+            snprintf(buf, sizeof(buf), "%d buf", (int)hdl->num);
+            Tcl_AppendElement(interp, buf);
+            snprintf(buf, sizeof(buf), "sz %d e %d i %d o %d",
+                     (int)conn->buf_sz, (int)conn->buf_empty,
+                     (int)conn->buf_in, (int)conn->buf_out);
+            Tcl_AppendElement(interp, buf);
+            if (conn->linked) {
+                snprintf(buf, sizeof(buf), "%d linked", (int)hdl->num);
+                Tcl_AppendElement(interp, buf);
+                snprintf(buf, sizeof(buf), "%d", (int)conn->linked->num);
+                Tcl_AppendElement(interp, buf);
+                if (conn->linked->usage != usage_conn && !err[0]) {
+                    snprintf(err, errsz, "on %d link to wrong type",
+                             (int)hdl->num);
+                }
+                else if (conn->linked->u.u_conn->linked != hdl && !err[0]) {
+                    snprintf(err, errsz, "%d links to %d links to %d",
+                             (int)hdl->num,
+                             (int)conn->linked->num,
+                             (int)(conn->linked->u.u_conn->linked ?
+                                   conn->linked->u.u_conn->linked->num : -1));
+                }
+            }
+        }
+        break;
+    case usage_mondir:
+        /* nothing to do (yet) */
+        break;
+    case usage_exec:
+        /* nothing to do (yet?) */
         break;
     }
 
