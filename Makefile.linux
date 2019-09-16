@@ -1,0 +1,17 @@
+# Makefile.linux - Copyright (C) 2019, Jeremy Dilatush.  All rights reserved.
+# Build "sockptyr" code for Linux: make -f Makefile.linux
+
+USE_INOTIFY=1
+DYL=.so
+DYLFLAGS=-shared
+CFLAGS=-fpic -g -Wall -DUSE_INOTIFY=$(USE_INOTIFY) -I/usr/include/tcl
+CFLAGS+= -D_XOPEN_SOURCE=600
+
+sockptyr$(DYL): sockptyr_core.o
+	$(CC) $(DYLFLAGS) -o $@ $^ -lc -ltcl
+sockptyr_core.o: sockptyr_core.c
+
+clean:
+	-rm -f sockptyr_core.o sockptyr$(DYL)
+test:
+	tclsh sockptyr_tests1.tcl ./sockptyr$(DYL) $(USE_INOTIFY)
