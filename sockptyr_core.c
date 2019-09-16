@@ -14,8 +14,6 @@
 /* Compile with -DUSE_INOTIFY=1 on Linux to take advantage of inotify(7) */
 #endif
 
-/* XXX add Tcl command to see the USE_INOTIFY & other build information */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,6 +89,8 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
                                          struct sockptyr_data *sd,
                                          struct sockptyr_hdl *hdl, int num,
                                          char *err, int errsz);
+static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
+                             int argc, const char *argv[]);
 static void sockptyr_clobber_handle(struct sockptyr_data *sd,
                                     struct sockptyr_hdl *hdl, int rec);
 static void sockptyr_init_conn(struct sockptyr_data *sd,
@@ -132,6 +132,8 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
         return(sockptyr_cmd_link(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "onclose")) {
         return(sockptyr_cmd_onclose(cd, interp, argc - 2, argv + 2));
+    } else if (!strcmp(argv[1], "info")) {
+        return(sockptyr_cmd_info(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "dbg_handles")) {
         return(sockptyr_cmd_dbg_handles(cd, interp));
     } else {
@@ -455,4 +457,29 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
                                          hdl->num * 2 + 1 + i, err, errsz);
         }
     }
+}
+
+/* Tcl command "sockptyr info" -- Provide some compile time information
+ * about this software, in the form of name value pairs like you'd use
+ * to initialize an array.
+ */
+static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
+                             int argc, const char *argv[])
+{
+    struct sockptyr_data *sd = cd;
+    struct sockptyr_hdl *hdl;
+    char buf[512];
+
+    if (argc != 0) {    
+        Tcl_SetResult(interp, "usage: sockptyr info", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    Tcl_SetResult(interp, "", TCL_STATIC);
+
+    Tcl_AppendElement(interp, "USE_INOTIFY");
+    snprintf(buf, sizeof(buf), "%d", (int)USE_INOTIFY);
+    Tcl_AppendElement(interp, buf);
+
+    return(TCL_OK);
 }
