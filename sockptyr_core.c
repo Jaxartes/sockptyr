@@ -18,10 +18,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <tcl.h>
+#include <assert.h>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <tcl.h>
 #if USE_INOTIFY
 #include <sys/inotify.h>
 #endif
@@ -61,6 +62,7 @@ struct sockptyr_hdl {
      * For each node sh, sh->count is a count of that handle and
      * all its descendants that are currently allocated.
      */
+    struct sockptyr_data *sd; /* global data */
     int num; /* handle number */
     struct sockptyr_hdl *children[2], *parent;
     int count;
@@ -101,15 +103,14 @@ static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
                                 int argc, const char *argv[]);
 static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp);
 static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
-                                         struct sockptyr_data *sd,
                                          struct sockptyr_hdl *hdl, int num,
                                          char *err, int errsz);
 static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
-static void sockptyr_clobber_handle(struct sockptyr_data *sd,
-                                    struct sockptyr_hdl *hdl, int rec);
-static void sockptyr_init_conn(struct sockptyr_data *sd,
-                               struct sockptyr_hdl *hdl, int fd, int code);
+static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec);
+static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
+static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
+static void sockptyr_conn_handler(ClientData cd, int mask);
 
 /*
  * Sockptyr_Init() -- The only external interface of "sockptyr_core.c" this
@@ -164,7 +165,7 @@ static void sockptyr_cleanup(ClientData cd)
 {
     struct sockptyr_data *sd = cd;
 
-    sockptyr_clobber_handle(sd, sd->rhdl, 1);
+    sockptyr_clobber_handle(sd->rhdl, 1);
     ckfree((void *)sd);
 }
 
@@ -192,7 +193,7 @@ static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
         Tcl_SetResult(interp, rb, TCL_VOLATILE);
         return(TCL_ERROR);
     }
-    sockptyr_init_conn(sd, hdl, fd, 'p');
+    sockptyr_init_conn(hdl, fd, 'p');
     
     /* return a handle string that leads back to 'hdl'; and the PTY filename */
     snprintf(rb, sizeof(rb), "%s%d %s",
@@ -251,7 +252,10 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
         conns[1]->linked = hdls[0];
     }
 
-    /* XXX update event handlers on both connections */
+    /* and update what evens they can handle based on the new linkage */
+    for (i = 0; i < argc; ++i) {
+        sockptyr_register_conn_handler(hdls[i]);
+    }
 
     return(TCL_OK);
 }
@@ -305,6 +309,7 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
         (*hdl)->children[1] = NULL;
         (*hdl)->num = num;
         (*hdl)->parent = parent;
+        (*hdl)->sd = sd;
     }
 
     /* account for it being put to use */
@@ -353,8 +358,7 @@ static struct sockptyr_hdl *sockptyr_lookup_handle(struct sockptyr_data *sd,
  * but doesn't; simpler to leave it around unused until/unless we want
  * it again.  If 'rec' is nonzero, will recurse to subtrees.
  */
-static void sockptyr_clobber_handle(struct sockptyr_data *sd,
-                                     struct sockptyr_hdl *hdl, int rec)
+static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
 {
     struct sockptyr_hdl *thumb;
 
@@ -367,11 +371,11 @@ static void sockptyr_clobber_handle(struct sockptyr_data *sd,
     }
 
     if (rec && hdl->children[0]) {
-        sockptyr_clobber_handle(sd, hdl->children[0], rec);
+        sockptyr_clobber_handle(hdl->children[0], rec);
         hdl->children[0] = NULL;
     }
     if (rec && hdl->children[1]) {
-        sockptyr_clobber_handle(sd, hdl->children[1], rec);
+        sockptyr_clobber_handle(hdl->children[1], rec);
         hdl->children[1] = NULL;
     }
 
@@ -413,8 +417,7 @@ static void sockptyr_clobber_handle(struct sockptyr_data *sd,
  * (often, a socket).  'code' is a code indicating the type of connection:
  *      'p' - PTY
  */
-static void sockptyr_init_conn(struct sockptyr_data *sd,
-                               struct sockptyr_hdl *hdl, int fd, int code)
+static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code)
 {
     struct sockptyr_conn *conn;
 
@@ -427,7 +430,7 @@ static void sockptyr_init_conn(struct sockptyr_data *sd,
     conn->buf_empty = 1;
     conn->buf_in = conn->buf_out = 0;
     conn->linked = NULL;
-    /* XXX Tcl_CreateFileHandler() probably indirectly */
+    sockptyr_register_conn_handler(hdl);
 }
 
 /* Tcl command "sockptyr dbg_handles" -- returns a list (of name value
@@ -442,7 +445,7 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
 
     Tcl_SetResult(interp, "", TCL_STATIC);
     err[0] = '\0';
-    sockptyr_cmd_dbg_handles_rec(interp, sd, sd->rhdl, 0, err, sizeof(err));
+    sockptyr_cmd_dbg_handles_rec(interp, sd->rhdl, 0, err, sizeof(err));
     if (err[0]) {
         Tcl_AppendElement(interp, "err");
         Tcl_AppendElement(interp, err);
@@ -455,12 +458,13 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
  * sockptyr_cmd_dbg_handles().
  */
 static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
-                                         struct sockptyr_data *sd,
                                          struct sockptyr_hdl *hdl, int num,
                                          char *err, int errsz)
 {
     int i, ecount;
     char buf[512];
+
+    if (hdl == NULL) return; /* nothing to do */
 
     if (hdl->num != num && !err[0]) {
         snprintf(err, errsz, "num wrong, got %d exp %d",
@@ -561,7 +565,7 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
 
     for (i = 0; i < 2; ++i) {
         if (hdl->children[i]) {
-            sockptyr_cmd_dbg_handles_rec(interp, sd, hdl->children[i],
+            sockptyr_cmd_dbg_handles_rec(interp, hdl->children[i],
                                          hdl->num * 2 + 1 + i, err, errsz);
         }
     }
@@ -588,4 +592,138 @@ static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
     Tcl_AppendElement(interp, buf);
 
     return(TCL_OK);
+}
+
+/* sockptyr_register_conn_handler(): For the given handle (which is
+ * assumed to refer to a connection) set/clear file event handlers as
+ * appropriate to handle the events that this connection is able to
+ * deal with at the moment.
+ */
+static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl)
+{
+    int mask = 0;
+    struct sockptyr_conn *conn = hdl->u.u_conn;
+    struct sockptyr_conn *lconn;
+
+    if (conn->fd < 0) {
+        /* nothing to do */
+        return;
+    }
+
+    if (conn->buf_empty || conn->buf_in != conn->buf_out) {
+        /* buffer isn't full; we can receive into it */
+        mask |= TCL_READABLE;
+    }
+    if (conn->linked && !conn->linked->u.u_conn->buf_empty) {
+        /* linked connection's buffer isn't empty; we can send from it */
+        mask |= TCL_WRITABLE;
+    }
+    Tcl_CreateFileHandler(conn->fd, mask, &sockptyr_conn_handler,
+                          (ClientData)hdl);
+}
+
+/* sockptyr_conn_handler(): Called by the Tcl event loop when the file
+ * descriptor associated with one of our connections can do something
+ * we want to do.  'cd' contains the 'struct sockptyr_hdl *' associated
+ * with the connection.
+ */
+static void sockptyr_conn_handler(ClientData cd, int mask)
+{
+    struct sockptyr_hdl *hdl = cd;
+    struct sockptyr_conn *conn, *lconn;
+    int rv, len;
+
+    /* Sanity check: Make sure the handle is a connection.  If it's not
+     * there's not much we can do about it, but crash.  My usual favorite
+     * (do nothing) is not an option since it would lead to the Tcl event
+     * loop calling this function over and over again for an event that
+     * will never be handled.  Another favorite (clear up the condition
+     * that led to this) isn't a good option, since even when we can do
+     * it it would lead to things being stuck without a clear reason.
+     * The more uptight option (report an error to the Tcl code) would
+     * require having a Tcl interpreter instance to report it to, and
+     * that doesn't seem to be the case in the event loop.  So... just crash.
+     */
+    assert(hdl != NULL);
+    assert(hdl->usage == usage_conn);
+    conn = hdl->u.u_conn;
+    assert(conn != NULL);
+    assert(conn->fd >= 0);
+    /* XXX or... maybe find a way to get to the Tcl interpreter sanely & report an error or do close */
+
+    /* see about receiving on this connection, into its buffer */
+    if ((mask & TCL_READABLE) && (conn->buf_empty ||
+                                  conn->buf_in != conn->buf_out)) {
+        if (conn->buf_empty) {
+            len = conn->buf_sz;
+            conn->buf_in = conn->buf_out = 0;
+        } else if (conn->buf_out > conn->buf_in) {
+            len = conn->buf_out - conn->buf_in;
+        } else {
+            len = conn->buf_sz - conn->buf_in;
+        }
+        rv = read(conn->fd, conn->buf + conn->buf_in, len);
+        if (rv < 0) {
+            /* EAGAIN / EWOULDBLOCK shouldn't happen on a blocking socket */
+            assert(errno != EAGAIN && errno != EWOULDBLOCK);
+            if (errno == EINTR) {
+                /* not really an error, just let it slide */
+            } else {
+                assert(0);
+            }
+        } else if (rv == 0) {
+            /* connection closed */
+            assert(0); /* XXX this is not the way */
+        } else {
+            /* got something, record it in the buffer */
+            conn->buf_empty = 1;
+            conn->buf_in += rv;
+        }
+        if (conn->buf_in == conn->buf_sz) {
+            /* wrap around */
+            conn->buf_in = 0;
+        }
+    }
+
+    /* see about sending on this connection, from the linked connection's
+     * buffer
+     */
+    if ((mask & TCL_WRITABLE) && conn->linked &&
+        !conn->linked->u.u_conn->buf_empty) {
+
+        lconn = conn->linked->u.u_conn;
+        if (conn->buf_in > conn->buf_out) {
+            len = conn->buf_in - conn->buf_out;
+        } else {
+            len = conn->buf_sz - conn->buf_out;
+        }
+        rv = write(conn->fd, lconn->buf + lconn->buf_out, len);
+        if (rv < 0) {
+            /* EAGAIN / EWOULDBLOCK shouldn't happen on a blocking socket */
+            assert(errno != EAGAIN && errno != EWOULDBLOCK);
+            if (errno == EINTR) {
+                /* not really an error, just let it slide */
+            } else {
+                assert(0);
+            }
+        } else if (rv == 0) {
+            /* shouldn't have happened */
+            assert(0);
+        } else {
+            conn->buf_out += rv;
+            if (conn->buf_out == conn->buf_sz) {
+                conn->buf_out = 0; /* wrap around */
+            }
+            if (conn->buf_in == conn->buf_out) {
+                /* became empty */
+                conn->buf_empty = 1;
+                conn->buf_in = conn->buf_out = 0;
+            }
+        }
+    }
+
+    /* since buffer pointers may have moved, maybe the set of events we could
+     * handle has changed
+     */
+    sockptyr_register_conn_handler(hdl);
 }
