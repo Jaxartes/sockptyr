@@ -47,6 +47,8 @@ struct sockptyr_conn {
      * points to the connection here
      */
     struct sockptyr_hdl *linked;
+
+    char *onclose, *onerror; /* Tcl scripts to handle events */
 };
 
 struct sockptyr_hdl {
@@ -82,8 +84,9 @@ struct sockptyr_hdl {
 };
 
 struct sockptyr_data {
-    /* state of the whole sockptyr instance */
+    /* state of the whole sockptyr instance on a given interpreter */
 
+    Tcl_Interp *interp; /* interpreter for event handling etc */
     struct sockptyr_hdl *rhdl; /* root handle "sockptyr_0" */
 };
 
@@ -101,6 +104,12 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
 static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
                                 int argc, const char *argv[]);
+static int sockptyr_cmd_onerror(ClientData cd, Tcl_Interp *interp,
+                                int argc, const char *argv[]);
+static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
+                                        Tcl_Interp *interp,
+                                        int argc, const char *argv[],
+                                        char *what, int isonerror);
 static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp);
 static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
                                          struct sockptyr_hdl *hdl, int num,
@@ -109,13 +118,19 @@ static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
 static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec);
 static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
+static void sockptyr_close_conn(struct sockptyr_hdl *hdl);
 static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
 static void sockptyr_conn_handler(ClientData cd, int mask);
+static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
+                                char *errkw, char *errstr);
 
 /*
  * Sockptyr_Init() -- The only external interface of "sockptyr_core.c" this
  * is run when you do "load $filename sockptyr" in Tcl.  It in turn registers
  * our commands and sets things up and stuff.
+ *
+ * If "sockptyr" is loaded into more than one intepreter they can't see
+ * each other's stuff or do anything together.
  */
 int Sockptyr_Init(Tcl_Interp *interp)
 {
@@ -124,6 +139,7 @@ int Sockptyr_Init(Tcl_Interp *interp)
     sd = (void *)ckalloc(sizeof(*sd));
     memset(sd, 0, sizeof(*sd));
     sd->rhdl = NULL;
+    sd->interp = interp;
 
     Tcl_CreateCommand(interp, "sockptyr",
                       &sockptyr_cmd, sd, &sockptyr_cleanup);
@@ -148,6 +164,8 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
         return(sockptyr_cmd_link(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "onclose")) {
         return(sockptyr_cmd_onclose(cd, interp, argc - 2, argv + 2));
+    } else if (!strcmp(argv[1], "onerror")) {
+        return(sockptyr_cmd_onerror(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "info")) {
         return(sockptyr_cmd_info(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "dbg_handles")) {
@@ -260,13 +278,71 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
     return(TCL_OK);
 }
 
+/* Tcl "sockptyr onclose $hdl $proc": When $hdl is closed, invoke
+ * Tcl script $proc.
+ * Leave out $proc to cancel it.
+ */
 static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
                                 int argc, const char *argv[])
 {
-    struct sockptyr_data *sd = cd;
+    return(sockptyr_cmd_onclose_onerror(cd, interp, argc, argv,
+                                        "onclose", 0));
+}
 
-    Tcl_SetResult(interp, "unimplemented", TCL_STATIC); /* XXX */
-    return(TCL_ERROR);
+/* Tcl "sockptyr onerror $hdl $proc": When an error occurs on $hdl
+ * in the background, invoke Tcl script $proc with two list items appended
+ * describing the exception:
+ *      keyword loosely identifying the kind of error
+ *      printable message like from strerror()
+ * Leave out $proc to cancel it.
+ */
+static int sockptyr_cmd_onerror(ClientData cd, Tcl_Interp *interp,
+                                int argc, const char *argv[])
+{
+    return(sockptyr_cmd_onclose_onerror(cd, interp, argc, argv,
+                                        "onerror", 1));
+}
+
+static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
+                                        Tcl_Interp *interp,
+                                        int argc, const char *argv[],
+                                        char *what, int isonerror)
+{
+    struct sockptyr_hdl *hdl;
+    char **resp;
+
+    if (sd->interp != interp) {
+        /* shouldn't happen */
+        Tcl_SetResult(interp, "cross interpreter call?!", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    if (argc < 1 || argc > 2) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("usage: sockptyr %s $hdl ?$proc?",
+                                       what));
+        return(TCL_ERROR);
+    }
+
+    hdl = sockptyr_lookup_handle(sd, argv[0]);
+    if (hdl == NULL || hdl->usage != usage_conn) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("handle %s is not a connection handle",
+                                       argv[0]));
+        return(TCL_ERROR);
+    }
+
+    resp = isonerror ? &(hdl->u.u_conn->onerror) : &(hdl->u.u_conn->onclose);
+    if (*resp) {
+        ckfree(*resp);
+        *resp = NULL;
+    }
+    if (argc > 1) {
+        *resp = ckalloc(strlen(argv[1]) + 1);
+        strcpy(*resp, argv[1]);
+    }
+
+    return(TCL_OK);
 }
 
 /* sockptyr_allocate_handle() -- Find an unused handle or create it and
@@ -398,6 +474,8 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
                 }
                 ckfree((void *)conn->buf);
                 ckfree((void *)conn);
+                if (conn->onclose) ckfree(conn->onclose);
+                if (conn->onerror) ckfree(conn->onerror);
                 hdl->u.u_conn = NULL;
             }
         }
@@ -430,6 +508,7 @@ static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code)
     conn->buf_empty = 1;
     conn->buf_in = conn->buf_out = 0;
     conn->linked = NULL;
+    conn->onclose = conn->onerror = NULL;
     sockptyr_register_conn_handler(hdl);
 }
 
@@ -553,6 +632,16 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
                                    conn->linked->u.u_conn->linked->num : -1));
                 }
             }
+            if (conn->onclose) {
+                snprintf(buf, sizeof(buf), "%d onclose", (int)hdl->num);
+                Tcl_AppendElement(interp, buf);
+                Tcl_AppendElement(interp, conn->onclose);
+            }
+            if (conn->onerror) {
+                snprintf(buf, sizeof(buf), "%d onerror", (int)hdl->num);
+                Tcl_AppendElement(interp, buf);
+                Tcl_AppendElement(interp, conn->onerror);
+            }
         }
         break;
     case usage_mondir:
@@ -603,7 +692,6 @@ static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl)
 {
     int mask = 0;
     struct sockptyr_conn *conn = hdl->u.u_conn;
-    struct sockptyr_conn *lconn;
 
     if (conn->fd < 0) {
         /* nothing to do */
@@ -633,23 +721,15 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
     struct sockptyr_conn *conn, *lconn;
     int rv, len;
 
-    /* Sanity check: Make sure the handle is a connection.  If it's not
-     * there's not much we can do about it, but crash.  My usual favorite
-     * (do nothing) is not an option since it would lead to the Tcl event
-     * loop calling this function over and over again for an event that
-     * will never be handled.  Another favorite (clear up the condition
-     * that led to this) isn't a good option, since even when we can do
-     * it it would lead to things being stuck without a clear reason.
-     * The more uptight option (report an error to the Tcl code) would
-     * require having a Tcl interpreter instance to report it to, and
-     * that doesn't seem to be the case in the event loop.  So... just crash.
-     */
+    /* Sanity checks */
     assert(hdl != NULL);
     assert(hdl->usage == usage_conn);
     conn = hdl->u.u_conn;
     assert(conn != NULL);
-    assert(conn->fd >= 0);
-    /* XXX or... maybe find a way to get to the Tcl interpreter sanely & report an error or do close */
+
+    if (conn->fd < 0) {
+        sockptyr_conn_event(hdl, "bug", "event on closed file descriptor");
+    }
 
     /* see about receiving on this connection, into its buffer */
     if ((mask & TCL_READABLE) && (conn->buf_empty ||
@@ -664,16 +744,18 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
         }
         rv = read(conn->fd, conn->buf + conn->buf_in, len);
         if (rv < 0) {
-            /* EAGAIN / EWOULDBLOCK shouldn't happen on a blocking socket */
-            assert(errno != EAGAIN && errno != EWOULDBLOCK);
             if (errno == EINTR) {
                 /* not really an error, just let it slide */
             } else {
-                assert(0);
+                sockptyr_conn_event(hdl,
+                                    (errno == EAGAIN || errno == EWOULDBLOCK) ?
+                                    "bug" : /* got these on blocking socket? */
+                                    "io", strerror(errno));
             }
         } else if (rv == 0) {
             /* connection closed */
-            assert(0); /* XXX this is not the way */
+            sockptyr_close_conn(hdl);
+            return;
         } else {
             /* got something, record it in the buffer */
             conn->buf_empty = 1;
@@ -700,15 +782,17 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
         rv = write(conn->fd, lconn->buf + lconn->buf_out, len);
         if (rv < 0) {
             /* EAGAIN / EWOULDBLOCK shouldn't happen on a blocking socket */
-            assert(errno != EAGAIN && errno != EWOULDBLOCK);
             if (errno == EINTR) {
                 /* not really an error, just let it slide */
             } else {
-                assert(0);
+                sockptyr_conn_event(hdl,
+                                    (errno == EAGAIN || errno == EWOULDBLOCK) ?
+                                    "bug" : /* got these on blocking socket? */
+                                    "io", strerror(errno));
             }
         } else if (rv == 0) {
             /* shouldn't have happened */
-            assert(0);
+            sockptyr_conn_event(hdl, "bug", "zero length write");
         } else {
             conn->buf_out += rv;
             if (conn->buf_out == conn->buf_sz) {
@@ -726,4 +810,65 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
      * handle has changed
      */
     sockptyr_register_conn_handler(hdl);
+}
+
+/* sockptyr_conn_event() -- handle something happening on a connection,
+ * like an error or it being closed, by calling the registered Tcl handler.
+ * If it's just closure, 'errkw' and 'errstr' should be NULL.  If it's
+ * an error they should be filled in.
+ *
+ * 'hdl' is assumed to be a connection, not one of the other things.
+ */
+static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
+                                char *errkw, char *errstr)
+{
+    struct sockptyr_conn *conn = hdl->u.u_conn;
+    struct sockptyr_data *sd = hdl->sd;
+    Tcl_Interp *interp = sd->interp;
+    Tcl_Obj *cmd;
+    int result;
+
+    if (errkw == NULL) {
+        if (conn->onclose == NULL) return; /* no handler */
+
+        cmd = Tcl_NewStringObj(conn->onclose, strlen(conn->onclose));
+        Tcl_IncrRefCount(cmd);
+    } else {
+        if (conn->onerror == NULL) return; /* no handler */
+
+        cmd = Tcl_NewStringObj(conn->onerror, strlen(conn->onerror));
+        if (errkw == NULL) errkw = "";
+        if (errstr == NULL) errstr = "";
+        Tcl_ListObjAppendElement(interp, cmd,
+                                 Tcl_NewStringObj(errkw, strlen(errkw)));
+        Tcl_ListObjAppendElement(interp, cmd,
+                                 Tcl_NewStringObj(errstr, strlen(errstr)));
+        Tcl_IncrRefCount(cmd);
+    }
+
+    Tcl_Preserve(interp);
+    result = Tcl_EvalObjEx(interp, cmd, TCL_EVAL_GLOBAL);
+#if 0 /* is Tcl_BackgroundException() maybe new? */
+    if (result != TCL_OK) {
+        Tcl_BackgroundException(interp, result);
+    }
+#endif
+    Tcl_Release(interp);
+    Tcl_DecrRefCount(cmd);
+}
+
+/* sockptyr_close_conn(): Close a conection, given by handle.  The handle
+ * must really be a connection or this will be bad.
+ */
+static void sockptyr_close_conn(struct sockptyr_hdl *hdl)
+{
+    struct sockptyr_conn *conn = hdl->u.u_conn;
+
+    if (conn->fd >= 0) {
+        Tcl_DeleteFileHandler(conn->fd);
+        close(conn->fd);
+        conn->fd = -1;
+    }
+    sockptyr_conn_event(hdl, NULL, NULL);
+    sockptyr_clobber_handle(hdl, 0);
 }
