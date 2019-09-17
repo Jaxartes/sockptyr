@@ -207,11 +207,28 @@ static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
     hdl = sockptyr_allocate_handle(sd);
     fd = posix_openpt(O_RDWR | O_NOCTTY);
     if (fd < 0) {
-        snprintf(rb, sizeof(rb), "sockptyr open_pty: %s", strerror(errno));
-        Tcl_SetResult(interp, rb, TCL_VOLATILE);
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr open_pty:"
+                                       " posix_openpt() failed: %s",
+                                       strerror(errno)));
         return(TCL_ERROR);
     }
-    /* XXX this may need to be followed up with something like grantpt() and unlockpt() */
+    if (grantpt(fd) < 0) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr open_pty:"
+                                       " grantpt() failed: %s",
+                                       strerror(errno)));
+        close(fd);
+        return(TCL_ERROR);
+    }
+    if (unlockpt(fd) < 0) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr open_pty:"
+                                       " unlockpt() failed: %s",
+                                       strerror(errno)));
+        close(fd);
+        return(TCL_ERROR);
+    }
     sockptyr_init_conn(hdl, fd, 'p');
     
     /* return a handle string that leads back to 'hdl'; and the PTY filename */
