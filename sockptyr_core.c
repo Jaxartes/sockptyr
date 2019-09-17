@@ -211,6 +211,7 @@ static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
         Tcl_SetResult(interp, rb, TCL_VOLATILE);
         return(TCL_ERROR);
     }
+    /* XXX this may need to be followed up with something like grantpt() and unlockpt() */
     sockptyr_init_conn(hdl, fd, 'p');
     
     /* return a handle string that leads back to 'hdl'; and the PTY filename */
