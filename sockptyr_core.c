@@ -724,6 +724,10 @@ static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl)
         /* linked connection's buffer isn't empty; we can send from it */
         mask |= TCL_WRITABLE;
     }
+#if 0
+    fprintf(stderr, "sockptyr_register_conn_handler(): on %d mask %d\n",
+            (int)hdl->num, (int)mask);
+#endif
     Tcl_CreateFileHandler(conn->fd, mask, &sockptyr_conn_handler,
                           (ClientData)hdl);
 }
@@ -745,6 +749,10 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
     conn = hdl->u.u_conn;
     assert(conn != NULL);
 
+#if 0
+    fprintf(stderr, "sockptyr_conn_handler() on %d mask %d\n",
+            (int)hdl->num, (int)mask);
+#endif
     if (conn->fd < 0) {
         sockptyr_conn_event(hdl, "bug", "event on closed file descriptor");
     }
@@ -761,6 +769,14 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             len = conn->buf_sz - conn->buf_in;
         }
         rv = read(conn->fd, conn->buf + conn->buf_in, len);
+        {
+            int e = errno;
+#if 0
+            fprintf(stderr, "read(): on %d, len %d rv %d errno %d\n",
+                    (int)hdl->num, (int)len, (int)rv, (int)e);
+#endif
+            errno = e;
+        }
         if (rv < 0) {
             if (errno == EINTR) {
                 /* not really an error, just let it slide */
@@ -776,7 +792,7 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             return;
         } else {
             /* got something, record it in the buffer */
-            conn->buf_empty = 1;
+            conn->buf_empty = 0;
             conn->buf_in += rv;
         }
         if (conn->buf_in == conn->buf_sz) {
@@ -792,12 +808,20 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
         !conn->linked->u.u_conn->buf_empty) {
 
         lconn = conn->linked->u.u_conn;
-        if (conn->buf_in > conn->buf_out) {
-            len = conn->buf_in - conn->buf_out;
+        if (lconn->buf_in > conn->buf_out) {
+            len = lconn->buf_in - lconn->buf_out;
         } else {
-            len = conn->buf_sz - conn->buf_out;
+            len = lconn->buf_sz - lconn->buf_out;
         }
         rv = write(conn->fd, lconn->buf + lconn->buf_out, len);
+#if 0
+        {
+            int e = errno;
+            fprintf(stderr, "write(): on %d, len %d rv %d errno %d\n",
+                    (int)hdl->num, (int)len, (int)rv, (int)e);
+            errno = e;
+        }
+#endif
         if (rv < 0) {
             /* EAGAIN / EWOULDBLOCK shouldn't happen on a blocking socket */
             if (errno == EINTR) {
@@ -812,14 +836,14 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             /* shouldn't have happened */
             sockptyr_conn_event(hdl, "bug", "zero length write");
         } else {
-            conn->buf_out += rv;
-            if (conn->buf_out == conn->buf_sz) {
-                conn->buf_out = 0; /* wrap around */
+            lconn->buf_out += rv;
+            if (lconn->buf_out == lconn->buf_sz) {
+                lconn->buf_out = 0; /* wrap around */
             }
-            if (conn->buf_in == conn->buf_out) {
+            if (lconn->buf_in == lconn->buf_out || !lconn->linked) {
                 /* became empty */
-                conn->buf_empty = 1;
-                conn->buf_in = conn->buf_out = 0;
+                lconn->buf_empty = 1;
+                lconn->buf_in = lconn->buf_out = 0;
             }
         }
     }
@@ -828,6 +852,8 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
      * handle has changed
      */
     sockptyr_register_conn_handler(hdl);
+    if (conn->linked)
+        sockptyr_register_conn_handler(conn->linked);
 }
 
 /* sockptyr_conn_event() -- handle something happening on a connection,
