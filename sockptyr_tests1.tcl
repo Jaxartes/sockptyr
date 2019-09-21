@@ -54,6 +54,9 @@ for {set i 0} {$i < 10} {incr i} {
 }
 puts stderr "Done"
 
+# "sockptyr connect" left out of this test because it's an annoying one,
+# wanting a unix domain socket to connect to.
+
 puts stderr ""
 puts stderr "Linking some of them..."
 set ijs [list]
