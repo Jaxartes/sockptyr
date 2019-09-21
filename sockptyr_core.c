@@ -27,6 +27,7 @@
 #include <sys/inotify.h>
 #endif
 #include <sys/socket.h>
+#include <sys/un.h>
 
 static const char *handle_prefix = "sockptyr_";
 
@@ -72,7 +73,7 @@ struct sockptyr_hdl {
     enum {
         usage_empty, /* just a placeholder, not counted, available for use */
         usage_conn, /* a connection, identifiable by handle */
-        usage_mondir, /* a monitored directory */
+        usage_mondir, /* a monitored directory XXX change to inotify */
         usage_exec, /* program started by "sockptyr exec" if I ever
                      * decide to implement it
                      */
@@ -98,8 +99,8 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
                         int argc, const char *argv[]);
 static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
                                  int argc, const char *argv[]);
-static int sockptyr_cmd_monitor_directory(ClientData cd, Tcl_Interp *interp,
-                                          int argc, const char *argv[]);
+static int sockptyr_cmd_connect(ClientData cd, Tcl_Interp *interp,
+                                int argc, const char *argv[]);
 static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
 static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
@@ -158,8 +159,8 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
         return(TCL_ERROR);
     } else if (!strcmp(argv[1], "open_pty")) {
         return(sockptyr_cmd_open_pty(cd, interp, argc - 2, argv + 2));
-    } else if (!strcmp(argv[1], "monitor_directory")) {
-        return(sockptyr_cmd_monitor_directory(cd, interp, argc - 2, argv + 2));
+    } else if (!strcmp(argv[1], "connect")) {
+        return(sockptyr_cmd_connect(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "link")) {
         return(sockptyr_cmd_link(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "onclose")) {
@@ -205,6 +206,8 @@ static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
 
     /* get a handle we can use for our result */
     hdl = sockptyr_allocate_handle(sd);
+
+    /* and open the PTY and set it up for use */
     fd = posix_openpt(O_RDWR | O_NOCTTY);
     if (fd < 0) {
         Tcl_SetObjResult(interp,
@@ -229,22 +232,72 @@ static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
         close(fd);
         return(TCL_ERROR);
     }
-    sockptyr_init_conn(hdl, fd, 'p');
-    
+
     /* return a handle string that leads back to 'hdl'; and the PTY filename */
+    sockptyr_init_conn(hdl, fd, 'p');
     snprintf(rb, sizeof(rb), "%s%d %s",
              handle_prefix, (int)hdl->num, ptsname(fd));
     Tcl_SetResult(interp, rb, TCL_VOLATILE);
     return(TCL_OK);
 }
 
-static int sockptyr_cmd_monitor_directory(ClientData cd, Tcl_Interp *interp,
-                                          int argc, const char *argv[])
+/* Tcl command "sockptyr connect" -- Connect to a unix domain stream socket
+ * given by pathname.  Return handle for the connection.
+ */
+static int sockptyr_cmd_connect(ClientData cd, Tcl_Interp *interp,
+                                int argc, const char *argv[])
 {
     struct sockptyr_data *sd = cd;
+    struct sockptyr_hdl *hdl;
+    struct sockaddr_un sa;
+    char rb[128];
+    int fd, l;
 
-    Tcl_SetResult(interp, "unimplemented", TCL_STATIC); /* XXX */
-    return(TCL_ERROR);
+    if (argc != 1) {
+        Tcl_SetResult(interp, "usage: sockptyr connect $path", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    /* process the address we were given */
+    memset(&sa, 0, sizeof(sa));
+#if 0 /* some platforms have sun_len, some don't */
+    sa.sun_len = sizeof(sa);
+#endif
+    sa.sun_family = AF_UNIX;
+    l = strlen(argv[0]);
+    if (l >= sizeof(sa.sun_path)) {
+        Tcl_SetResult(interp, "sockptyr connect: path name too long",
+                      TCL_STATIC);
+        return(TCL_ERROR);
+    }
+    strcpy(&(sa.sun_path[0]), argv[0]);
+
+    /* get a handle we can use for our result */
+    hdl = sockptyr_allocate_handle(sd);
+
+    /* open a socket and connect */
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr connect:"
+                                       " socket() failed: %s",
+                                       strerror(errno)));
+        return(TCL_ERROR);
+    }
+    if (connect(fd, (void *)&sa, sizeof(sa)) < 0) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr connect:"
+                                       " connect(%s) failed: %s",
+                                       argv[0], strerror(errno)));
+        close(fd);
+        return(TCL_ERROR);
+    }
+
+    /* return a handle string that leads back to 'hdl' */
+    sockptyr_init_conn(hdl, fd, 's');
+    snprintf(rb, sizeof(rb), "%s%d", handle_prefix, (int)hdl->num);
+    Tcl_SetResult(interp, rb, TCL_VOLATILE);
+    return(TCL_OK);
 }
 
 /* Tcl command "sockptyr link $hdl1 $hdl2" to link two connections together */
