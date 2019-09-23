@@ -51,13 +51,13 @@ set sok_sel1 0
 set sok_sel2 1
 
 proc read_stdin {} {
-    global sokh sokp sok_ctr sok_sel0 sok_sel1
+    global sokh sokp sok_ctr sok_sel1 sok_sel2
 
     set ch [read stdin 1]
     switch -- $ch {
         "." {
             sockptyr link $sokh($sok_sel1) $sokh($sok_sel2)
-            puts stderr "Linked sockets: $sokp($sok_sel1) $pytp($sok_sel2)"
+            puts stderr "Linked sockets: $sokp($sok_sel1) $sokp($sok_sel2)"
         }
         "?" {
             array set data [sockptyr dbg_handles]

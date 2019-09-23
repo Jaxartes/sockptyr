@@ -11,7 +11,8 @@
 
 #ifndef USE_INOTIFY
 #define USE_INOTIFY 0
-/* Compile with -DUSE_INOTIFY=1 on Linux to take advantage of inotify(7) */
+/* Compile with -DUSE_INOTIFY=1 on Linux to take advantage of inotify(7). */
+/* XXX inotify code not tested or even compiled yet */
 #endif
 
 #include <stdio.h>
@@ -25,11 +26,63 @@
 #include <tcl.h>
 #if USE_INOTIFY
 #include <sys/inotify.h>
-#endif
+#endif /* USE_INOTIFY */
 #include <sys/socket.h>
 #include <sys/un.h>
 
 static const char *handle_prefix = "sockptyr_";
+
+#if USE_INOTIFY
+static struct {
+    char *name;
+    uint32_t value;
+} inotify_bits[] = {
+#define INOT_FLAG(x) { #x, x }
+    /* (this current list based on Linux 4.19.2 kernel) */
+    /* single bit flags for events you can request and receive */
+    INOT_FLAG(IN_ACCESS),       /* File was accessed */
+    INOT_FLAG(IN_MODIFY),       /* File was modified */
+    INOT_FLAG(IN_ATTRIB),       /* Metadata changed */
+    INOT_FLAG(IN_CLOSE_WRITE),  /* Writtable file was closed */
+    INOT_FLAG(IN_CLOSE_NOWRITE),/* Unwrittable file closed */
+    INOT_FLAG(IN_OPEN),         /* File was opened */
+    INOT_FLAG(IN_MOVED_FROM),   /* File was moved from X */
+    INOT_FLAG(IN_MOVED_TO),     /* File was moved to Y */
+    INOT_FLAG(IN_CREATE),       /* Subfile was created */
+    INOT_FLAG(IN_DELETE),       /* Subfile was deleted */
+    INOT_FLAG(IN_DELETE_SELF),  /* Self was deleted */
+    INOT_FLAG(IN_MOVE_SELF),    /* Self was moved */
+
+    /* single bit flags for events you receive but don't request */
+    INOT_FLAG(IN_UNMOUNT),      /* Backing fs was unmounted */
+    INOT_FLAG(IN_Q_OVERFLOW),   /* Event queued overflowed */
+    INOT_FLAG(IN_IGNORED),      /* File was ignored */
+
+    /* not events; flags you set when watching */
+    INOT_FLAG(IN_ONLYDIR),      /* only watch the path if it is a directory */
+    INOT_FLAG(IN_DONT_FOLLOW),  /* don't follow a sym link */
+    INOT_FLAG(IN_EXCL_UNLINK),  /* exclude events on unlinked objects */
+    INOT_FLAG(IN_MASK_CREATE),  /* only create watches */
+    INOT_FLAG(IN_MASK_ADD),     /*add to the mask of an already existing watch*/
+    INOT_FLAG(IN_ISDIR),        /* event occurred against dir */
+    INOT_FLAG(IN_ONESHOT),      /* only send event once */
+
+    /* names for groups of the flags above */
+    INOT_FLAG(IN_CLOSE),        /* close */
+    INOT_FLAG(IN_MOVE),         /* moves */
+
+    /* mark the end of inotify flags */
+    { NULL, 0 }
+};
+
+struct sockptyr_inot {
+    /* inotify(7) watch specific information in sockptyr */
+    int wd; /* watch descriptor used to identify its events */
+    Tcl_Obj *proc; /* Tcl code to run when encountered */
+    struct sockptyr_hdl *next; /* linked list of handles with usage_inot */
+    struct sockptyr_hdl **prev; /* make it a one and a half linked list */
+};
+#endif /* USE_INOTIFY */
 
 struct sockptyr_conn {
     /* connection specific information in sockptyr */
@@ -73,7 +126,9 @@ struct sockptyr_hdl {
     enum {
         usage_empty, /* just a placeholder, not counted, available for use */
         usage_conn, /* a connection, identifiable by handle */
-        usage_mondir, /* a monitored directory XXX change to inotify */
+#if USE_INOTIFY
+        usage_inot, /* something monitored with "sockptyr inotify" */
+#endif /* USE_INOTIFY */
         usage_exec, /* program started by "sockptyr exec" if I ever
                      * decide to implement it
                      */
@@ -81,6 +136,9 @@ struct sockptyr_hdl {
 
     union {
         struct sockptyr_conn *u_conn; /* if usage == usage_conn */
+#if USE_INOTIFY
+        struct sockptyr_inot *u_inot; /* if usage == usage_inot */
+#endif /* USE_INOTIFY */
     } u;
 };
 
@@ -89,6 +147,10 @@ struct sockptyr_data {
 
     Tcl_Interp *interp; /* interpreter for event handling etc */
     struct sockptyr_hdl *rhdl; /* root handle "sockptyr_0" */
+#if USE_INOTIFY
+    int inotify_fd; /* file descriptor for inotify(7) */
+    struct sockptyr_hdl *inotify_hdls; /* handles with usage_inot */
+#endif /* USE_INOTIFY */
 };
 
 static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd);
@@ -117,6 +179,10 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
                                          char *err, int errsz);
 static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
+#if USE_INOTIFY
+static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
+                                int argc, const char *argv[]);
+#endif /* USE_INOTIFY */
 static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec);
 static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
 static void sockptyr_close_conn(struct sockptyr_hdl *hdl);
@@ -124,6 +190,10 @@ static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
 static void sockptyr_conn_handler(ClientData cd, int mask);
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
                                 char *errkw, char *errstr);
+#if USE_INOTIFY
+static void sockptyr_inot_handler(ClientData cd, int mask);
+static Tcl_Obj *sockptyr_inot_flagrep(Tcl_Interp *interp, uint32_t flags);
+#endif /* USE_INOTIFY */
 
 /*
  * Sockptyr_Init() -- The only external interface of "sockptyr_core.c" this
@@ -141,6 +211,9 @@ int Sockptyr_Init(Tcl_Interp *interp)
     memset(sd, 0, sizeof(*sd));
     sd->rhdl = NULL;
     sd->interp = interp;
+#if USE_INOTIFY
+    sd->inotify_fd = -1;
+#endif /* USE_INOTIFY */
 
     Tcl_CreateCommand(interp, "sockptyr",
                       &sockptyr_cmd, sd, &sockptyr_cleanup);
@@ -169,6 +242,11 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
         return(sockptyr_cmd_onerror(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "info")) {
         return(sockptyr_cmd_info(cd, interp, argc - 2, argv + 2));
+#if USE_INOTIFY
+    } else if (!strcmp(argv[1], "inotify")) {
+        return(sockptyr_cmd_inotify(cd, interp, argc - 2, argv + 2));
+#endif /* USE_INOTIFY */
+    /* XXX add: "close" */
     } else if (!strcmp(argv[1], "dbg_handles")) {
         return(sockptyr_cmd_dbg_handles(cd, interp));
     } else {
@@ -185,6 +263,12 @@ static void sockptyr_cleanup(ClientData cd)
     struct sockptyr_data *sd = cd;
 
     sockptyr_clobber_handle(sd->rhdl, 1);
+#if USE_INOTIFY
+    if (sd->inotify_fd >= 0) {
+        Tcl_DeleteFileHandler(sd->inotify_fd);
+        close(sd->inotify_fd);
+    }
+#endif /* USE_INOTIFY */
     ckfree((void *)sd);
 }
 
@@ -551,9 +635,20 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
             }
         }
         break;
-    case usage_mondir:
-        /* XXX */
+#if USE_INOTIFY
+    case usage_inot:
+        {
+            struct sockptyr_inot *inot = hdl->u.u_inot;
+            if (inot) {
+                inotify_rm_watch(hdl->sd->inotify_fd, inot->wd);
+                *(inot->prev) = inot->next;
+                Tcl_DecrRefCount(inot->proc);
+                ckfree((void *)inot);
+                hdl->u.u_inot = NULL;
+            }
+        }
         break;
+#endif /* USE_INOTIFY */
     default:
         /* shouldn't happen */
         --*(unsigned *)1; /* this is intended to crash */
@@ -657,7 +752,9 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     switch (hdl->usage) {
     case usage_empty:   Tcl_AppendElement(interp, "empty"); break;
     case usage_conn:    Tcl_AppendElement(interp, "conn"); break;
-    case usage_mondir:  Tcl_AppendElement(interp, "mondir"); break;
+#if USE_INOTIFY
+    case usage_inot:    Tcl_AppendElement(interp, "inotify"); break;
+#endif
     case usage_exec:    Tcl_AppendElement(interp, "exec"); break;
     default:
         if (!err[0]) {
@@ -715,9 +812,17 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
             }
         }
         break;
-    case usage_mondir:
-        /* nothing to do (yet) */
+#if USE_INOTIFY
+    case usage_inot:
+        snprintf(buf, sizeof(buf), "%d wd", (int)hdl->num);
+        Tcl_AppendElement(interp, buf);
+        snprintf(buf, sizeof(buf), "%d", (int)hdl->u.u_inot->wd);
+        Tcl_AppendElement(interp, buf);
+        snprintf(buf, sizeof(buf), "%d proc", (int)hdl->num);
+        Tcl_AppendElement(interp, buf);
+        Tcl_AppendElement(interp, Tcl_GetString(hdl->u.u_inot->proc));
         break;
+#endif /* USE_INOTIFY */
     case usage_exec:
         /* nothing to do (yet?) */
         break;
@@ -753,6 +858,112 @@ static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
 
     return(TCL_OK);
 }
+
+#if USE_INOTIFY
+/* Tcl command "sockptyr inotify" -- Interface to Linux's inotify(7)
+ * subsystem. The first call to "sockptyr inotify" creates a notify
+ * instance; each call adds a watch to it.
+ *
+ * Parameters:
+ *      filename
+ *      list of events to watch for (along with a few additional flags
+ *          inotify_add_watch() takes); example: {IN_ACCESS IN_ATTRIB}
+ *      Tcl script to run when even occurs; with the following appended:
+ *          list of event flags like IN_ACCESS
+ *          cookie associating related events
+ *          name field if any, or empty string
+ *
+ * This implementation is inefficient for having a lot of watches; doesn't
+ * provide all the conceivable options; is only available on Linux.
+ */
+static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
+                                int argc, const char *argv[])
+{
+    struct sockptyr_data *sd = cd;
+    struct sockptyr_hdl *hdl;
+    struct sockptyr_inot *inot;
+    uint32_t mask;
+    int mask_argc, i, j, wd;
+    const char **mask_argv;
+    char *ep;
+
+    if (argc != 3) {
+        Tcl_SetResult(interp, "usage: sockptyr inotify $path $mask $run",
+                      TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    /* create an inotify instance if we haven't already */
+    if (sd->inotify_fd < 0) {
+        sd->inotify_fd = inotify_init();
+        if (sd->inotify_fd < 0) {
+            Tcl_SetObjResult(interp,
+                             Tcl_ObjPrintf("inotify_init() failed: %s",
+                                           strerror(errno)));
+            return(TCL_ERROR);
+        }
+        Tcl_CreateFileHandler(sd->inotify_fd, TCL_READABLE,
+                              &sockptyr_inot_handler, (ClientData)sd);
+    }
+
+    /* process the mask value */
+    mask = 0;
+    mask_argc = 0;
+    mask_argv = NULL;
+    if (Tcl_SplitList(interp, argv[1], &mask_argc, &mask_argv) != TCL_OK) {
+        return(TCL_ERROR);
+    }
+    for (i = 0; i < mask_argc; ++i) {
+        for (j = 0; inotify_bits[j].name; ++j) {
+            if (!strcasecmp(mask_argv[i], inotify_bits[j].name)) {
+                break;
+            }
+        }
+        if (inotify_bits[j].name) {
+            mask |= inotify_bits[j].value;
+        } else {
+            ep = NULL;
+            mask |= strtol(mask_argv[i], &ep, 0);
+            if (ep && *ep) {
+                Tcl_SetObjResult(interp,
+                                 Tcl_ObjPrintf("sockptyr inotify:"
+                                               " unrecognized mask code '%s'",
+                                               mask_argv[i]));
+                Tcl_Free((void *)mask_argv);
+                return(TCL_ERROR);
+            }
+        }
+    }
+    Tcl_Free((void *)mask_argv);
+
+    /* set up the watch */
+    wd = inotify_add_watch(sd->inotify_fd, argv[0], mask);
+    if (wd < 0) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr inotify:"
+                                       " OS failed to add watch: %s",
+                                       strerror(errno)));
+        return(TCL_ERROR);
+    }
+
+    /* set up a handle we can use for our result; and fill it in */
+    hdl = sockptyr_allocate_handle(sd);
+    hdl->usage = usage_inot;
+    hdl->u.u_inot = inot = (void *)ckalloc(sizeof(*inot));
+    memset(inot, 0, sizeof(*inot));
+    inot->wd = wd;
+    inot->proc = Tcl_NewStringObj(argv[2], strlen(argv[2]));
+    Tcl_IncrRefCount(inot->proc);
+    inot->next = sd->inotify_hdls;
+    sd->inotify_hdls = hdl;
+    inot->prev = &(sd->inotify_hdls);
+
+    /* return a handle string identifying it */
+    Tcl_SetObjResult(interp, Tcl_ObjPrintf("%s%d",
+                                           handle_prefix, (int)hdl->num));
+    return(TCL_OK);
+}
+#endif /* !USE_INOTIFY */
 
 /* sockptyr_register_conn_handler(): For the given handle (which is
  * assumed to refer to a connection) set/clear file event handlers as
@@ -822,14 +1033,14 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             len = conn->buf_sz - conn->buf_in;
         }
         rv = read(conn->fd, conn->buf + conn->buf_in, len);
+#if 0
         {
             int e = errno;
-#if 0
             fprintf(stderr, "read(): on %d, len %d rv %d errno %d\n",
                     (int)hdl->num, (int)len, (int)rv, (int)e);
-#endif
             errno = e;
         }
+#endif
         if (rv < 0) {
             if (errno == EINTR) {
                 /* not really an error, just let it slide */
@@ -909,6 +1120,110 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
         sockptyr_register_conn_handler(conn->linked);
 }
 
+#if USE_INOTIFY
+/* sockptyr_inot_handler() -- When an inotify(7) message comes in,
+ * read it, find the handler that was registered for it, and run
+ * it.
+ */
+static void sockptyr_inot_handler(ClientData cd, int mask)
+{
+    struct sockptyr_data *sd = cd;
+    struct inotify_event *ie;
+    struct sockptyr_hdl *hdl;
+    struct sockptyr *inot;
+    char buf[65536];
+    int got, pos, e, rv;
+    Tcl_Obj *tclcom, *flags;
+
+    /* sanity checks */
+    assert(mask & TCL_READABLE);
+    assert(sd);
+    assert(sd->inotify_fd >= 0);
+
+    /* read some events into buf[] */
+    got = read(sd->inotify_fd, buf, sizeof(buf));
+    if (got < 0) {
+        /* some kind of error happened */
+        if (errno == EINTR) {
+            /* not really an error, just let it slide */
+        } else {
+            /* really an error, but not much we can do right here! */
+            fprintf(stderr, "sockptyr_inot_handler() read() error: %s\n",
+                    strerror(errno));
+            fprintf(stderr, "sockptyr inotify shutting down\n");
+            Tcl_DeleteFileHandler(sd->inotify_fd);
+            sd->inotify_fd = -1;
+            return;
+        }
+    } else if (got == 0) {
+        /* End of file shouldn't happen, and we shouldn't have been
+         * called if there was nothing to read.  Don't let that happen
+         * frequently.
+         */
+        fprintf(stderr, "sockptyr_inot_handler() read empty\n");
+        fprintf(stderr, "sockptyr inotify shutting down\n");
+        Tcl_DeleteFileHandler(sd->inotify_fd);
+        sd->inotify_fd = -1;
+        return;
+    }
+
+    for (pos = 0; pos < got; ) {
+        if (got - pos < sizeof(*ie) ||
+            got - pos < sizeof(*ie) + ie->len) {
+            /* Not enough left in the buffer to make a whole event.
+             * This shouldn't have happened:  I *think* the kernel shouldn't
+             * do this.
+             */
+            fprintf(stderr, "sockptyr_inot_handler() read incomplete\n");
+            fprintf(stderr, "sockptyr inotify shutting down\n");
+            Tcl_DeleteFileHandler(sd->inotify_fd);
+            sd->inotify_fd = -1;
+            return;
+        }
+        ie = (void *)&(buf[pos]);
+
+        /* Find our own watch information about ie->wd */
+        for (hdl = sd->inotify_hdls; hdl; hdl = hdl->next) {
+            if (ie->wd == hdl->u.u_inot->wd)
+                break;
+        }
+        if (!hdl) {
+            fprintf(stderr, "sockptyr_inot_handler() unknown wd %d; ignoring\n",
+                    (int)ie->wd);
+            inotify_rm_watch(sd->inotify_fd, sd->wd);
+            sd->inotify_fd = -1;
+            continue;
+        }
+        inot = hdl->u.u_inot;
+
+        /* append additional info to inot->proc and call it */
+        tclcom = Tcl_DuplicateObj(inot->proc);
+        Tcl_IncrRefCount(tclcom);
+        flags = sockptyr_inot_flagrep(interp, ie->mask);
+        Tcl_ListObjAppendElement(interp, tclcom, flags);
+        Tcl_DecrRefCount(flags);
+        Tcl_ListObjAppendElement(interp, tclcom,
+                                 Tcl_ObjPrintf("%lu",
+                                               (unsigned long)ie->cookie));
+        Tcl_ListObjAppendElement(interp, tclcom,
+                                 Tcl_NewStringObj(ie->name,
+                                                  strnlen(ie->name, ie->len)));
+        Tcl_Preserve(interp);
+        rv = Tcl_EvalObjEx(interp, tclcom, TCL_EVAL_GLOBAL);
+#if 0 /* is Tcl_BackgroundException() maybe new? */
+        if (result != TCL_OK) {
+            Tcl_BackgroundException(interp, result);
+        }
+#endif
+        Tcl_Release(interp);
+        Tcl_DecrRefCount(tclcom);
+
+        /* move on to the next one, if any */
+        pos += sizeof(*ie) + ie->len;
+    }
+}
+#endif /* USE_INOTIFY */
+
 /* sockptyr_conn_event() -- handle something happening on a connection,
  * like an error or it being closed, by calling the registered Tcl handler.
  * If it's just closure, 'errkw' and 'errstr' should be NULL.  If it's
@@ -969,3 +1284,37 @@ static void sockptyr_close_conn(struct sockptyr_hdl *hdl)
     sockptyr_conn_event(hdl, NULL, NULL);
     sockptyr_clobber_handle(hdl, 0);
 }
+
+#if USE_INOTIFY
+/* sockptyr_inot_flagrep(): Given a collection of inotify(7) flags, return
+ * a list of names for them, derived from inotify_bits[].  The returned
+ * Tcl object has a refcount of 1.
+ */
+static Tcl_Obj *sockptyr_inot_flagrep(Tcl_Interp *interp, uint32_t flags)
+{
+    Tcl_Obj *o;
+    int i;
+    uint32_t rep = 0;
+    char *n;
+
+    /* start with an empty list */
+    o = Tcl_NewListObj(0, &o);
+    Tcl_IncrRefCount(o);
+    
+    for (i = 0; inotify_bits[i].name; ++i) {
+        if ((inotify_bits[i].value & flags) == inotify_bits[i].value) {
+            rep |= inotify_bits[i].value;
+            n = inotify_bits[i].name;
+            Tcl_ListObjAppendElement(interp, o,
+                                     Tcl_NewStringObj(n, strlen(n)));
+        }
+    }
+    if (rep != flags) {
+        rep = flags & ~rep;
+        Tcl_ListObjAppendElement(interp, o,
+                                 Tcl_ObjPrintf("%lu", (unsigned long)rep));
+    }
+
+    return(o);
+}
+#endif /* USE_INOTIFY */

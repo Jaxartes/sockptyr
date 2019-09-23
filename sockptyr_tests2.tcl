@@ -44,7 +44,7 @@ set pty_sel1 0
 set pty_sel2 1
 
 proc read_stdin {} {
-    global ptyh ptyp pty_ctr pty_sel0 pty_sel1
+    global ptyh ptyp pty_ctr pty_sel1 pty_sel2
 
     set ch [read stdin 1]
     switch -- $ch {
@@ -55,7 +55,7 @@ proc read_stdin {} {
         }
         "." {
             sockptyr link $ptyh($pty_sel1) $ptyh($pty_sel2)
-            puts stderr "Linked PTYs: $ptyp($pty_sel1) $pytp($pty_sel2)"
+            puts stderr "Linked PTYs: $ptyp($pty_sel1) $ptyp($pty_sel2)"
         }
         "?" {
             array set data [sockptyr dbg_handles]
