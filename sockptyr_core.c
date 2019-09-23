@@ -62,7 +62,9 @@ static struct {
     INOT_FLAG(IN_ONLYDIR),      /* only watch the path if it is a directory */
     INOT_FLAG(IN_DONT_FOLLOW),  /* don't follow a sym link */
     INOT_FLAG(IN_EXCL_UNLINK),  /* exclude events on unlinked objects */
+#ifdef IN_MASK_CREATE
     INOT_FLAG(IN_MASK_CREATE),  /* only create watches */
+#endif
     INOT_FLAG(IN_MASK_ADD),     /*add to the mask of an already existing watch*/
     INOT_FLAG(IN_ISDIR),        /* event occurred against dir */
     INOT_FLAG(IN_ONESHOT),      /* only send event once */
@@ -1130,10 +1132,11 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
     struct sockptyr_data *sd = cd;
     struct inotify_event *ie;
     struct sockptyr_hdl *hdl;
-    struct sockptyr *inot;
+    struct sockptyr_inot *inot;
     char buf[65536];
-    int got, pos, e, rv;
+    int got, pos, rv;
     Tcl_Obj *tclcom, *flags;
+    Tcl_Interp *interp = sd->interp;
 
     /* sanity checks */
     assert(mask & TCL_READABLE);
@@ -1168,6 +1171,7 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
     }
 
     for (pos = 0; pos < got; ) {
+        ie = (void *)&(buf[pos]);
         if (got - pos < sizeof(*ie) ||
             got - pos < sizeof(*ie) + ie->len) {
             /* Not enough left in the buffer to make a whole event.
@@ -1180,17 +1184,16 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
             sd->inotify_fd = -1;
             return;
         }
-        ie = (void *)&(buf[pos]);
 
         /* Find our own watch information about ie->wd */
-        for (hdl = sd->inotify_hdls; hdl; hdl = hdl->next) {
+        for (hdl = sd->inotify_hdls; hdl; hdl = hdl->u.u_inot->next) {
             if (ie->wd == hdl->u.u_inot->wd)
                 break;
         }
         if (!hdl) {
             fprintf(stderr, "sockptyr_inot_handler() unknown wd %d; ignoring\n",
                     (int)ie->wd);
-            inotify_rm_watch(sd->inotify_fd, sd->wd);
+            inotify_rm_watch(sd->inotify_fd, ie->wd);
             sd->inotify_fd = -1;
             continue;
         }
