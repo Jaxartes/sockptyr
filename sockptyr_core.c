@@ -107,6 +107,12 @@ struct sockptyr_conn {
     char *onclose, *onerror; /* Tcl scripts to handle events */
 };
 
+struct sockptyr_lstn {
+    /* listen() socket specific information in sockptyr */
+    int sok; /* socket file descriptor */
+    Tcl_Obj *proc; /* Tcl code to run for each new connection */
+};
+
 struct sockptyr_hdl {
     /* Info about a single handle in sockptyr.  They're
      * organized in a kind of tree under 'struct sockptyr_data', its
@@ -134,6 +140,7 @@ struct sockptyr_hdl {
         usage_exec, /* program started by "sockptyr exec" if I ever
                      * decide to implement it
                      */
+        usage_lstn, /* a listen() socket created with "sockptyr listen" */
     } usage;
 
     union {
@@ -141,6 +148,7 @@ struct sockptyr_hdl {
 #if USE_INOTIFY
         struct sockptyr_inot *u_inot; /* if usage == usage_inot */
 #endif /* USE_INOTIFY */
+        struct sockptyr_lstn *u_lstn; /* if usage == usage_lstn */
     } u;
 };
 
@@ -165,6 +173,8 @@ static int sockptyr_cmd_open_pty(ClientData cd, Tcl_Interp *interp,
                                  int argc, const char *argv[]);
 static int sockptyr_cmd_connect(ClientData cd, Tcl_Interp *interp,
                                 int argc, const char *argv[]);
+static int sockptyr_cmd_listen(ClientData cd, Tcl_Interp *interp,
+                               int argc, const char *argv[]);
 static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
 static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
@@ -192,6 +202,7 @@ static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
 static void sockptyr_close_conn(struct sockptyr_hdl *hdl);
 static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
 static void sockptyr_conn_handler(ClientData cd, int mask);
+static void sockptyr_lstn_handler(ClientData cd, int mask);
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
                                 char *errkw, char *errstr);
 #if USE_INOTIFY
@@ -238,6 +249,8 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
         return(sockptyr_cmd_open_pty(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "connect")) {
         return(sockptyr_cmd_connect(cd, interp, argc - 2, argv + 2));
+    } else if (!strcmp(argv[1], "listen")) {
+        return(sockptyr_cmd_listen(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "link")) {
         return(sockptyr_cmd_link(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "onclose")) {
@@ -361,9 +374,6 @@ static int sockptyr_cmd_connect(ClientData cd, Tcl_Interp *interp,
     }
     strcpy(&(sa.sun_path[0]), argv[0]);
 
-    /* get a handle we can use for our result */
-    hdl = sockptyr_allocate_handle(sd);
-
     /* open a socket and connect */
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -382,10 +392,92 @@ static int sockptyr_cmd_connect(ClientData cd, Tcl_Interp *interp,
         return(TCL_ERROR);
     }
 
-    /* return a handle string that leads back to 'hdl' */
-    sockptyr_init_conn(hdl, fd, 's');
+    /* get a handle we can use for our result; return a string for it */
+    hdl = sockptyr_allocate_handle(sd);
+    sockptyr_init_conn(hdl, fd, 'c');
     snprintf(rb, sizeof(rb), "%s%d", handle_prefix, (int)hdl->num);
     Tcl_SetResult(interp, rb, TCL_VOLATILE);
+    return(TCL_OK);
+}
+
+/* Tcl command "sockptyr listen" -- Open a unix domain stream socket
+ * given by pathname & listen for connections on it.  Execute a Tcl
+ * script for each new connection.
+ *
+ * Parameters:
+ *      path: filename/address of the socket to listen on
+ *      proc: Tcl script to execute after appending two words:
+ *          a handle for the new connection
+ *          empty string (reserved for peer address in the future)
+ *
+ * This creates the socket file, and fails if it already exists.
+ */
+static int sockptyr_cmd_listen(ClientData cd, Tcl_Interp *interp,
+                               int argc, const char *argv[])
+{
+    struct sockptyr_data *sd = cd;
+    struct sockptyr_hdl *hdl;
+    struct sockptyr_lstn *lstn;
+    struct sockaddr_un sa;
+    int sok, l;
+
+    if (argc != 2) {
+        Tcl_SetResult(interp, "usage: sockptyr listen $path $proc", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    /* process the address we were given */
+    memset(&sa, 0, sizeof(sa));
+#if 0 /* some platforms have sun_len, some don't */
+    sa.sun_len = sizeof(sa);
+#endif
+    sa.sun_family = AF_UNIX;
+    l = strlen(argv[0]);
+    if (l >= sizeof(sa.sun_path)) {
+        Tcl_SetResult(interp, "sockptyr connect: path name too long",
+                      TCL_STATIC);
+        return(TCL_ERROR);
+    }
+    strcpy(&(sa.sun_path[0]), argv[0]);
+
+    /* open a socket and listen */
+    sok = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sok < 0) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr listen:"
+                                       " socket() failed: %s",
+                                       strerror(errno)));
+        return(TCL_ERROR);
+    }
+    if (bind(sok, (void *)&sa, sizeof(sa)) < 0) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr listen:"
+                                       " bind(%s) failed: %s",
+                                       argv[0], strerror(errno)));
+        close(sok);
+        return(TCL_ERROR);
+    }
+    if (listen(sok, 2) < 0) {
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("sockptyr listen:"
+                                       " listen() failed: %s",
+                                       strerror(errno)));
+        close(sok);
+        return(TCL_ERROR);
+    }
+
+    /* get a handle we can use for our result; return a string for it */
+    hdl = sockptyr_allocate_handle(sd);
+    hdl->usage = usage_lstn;
+    hdl->u.u_lstn = lstn = (void *)ckalloc(sizeof(*lstn));
+    memset(lstn, 0, sizeof(*lstn));
+    lstn->sok = sok;
+    lstn->proc = Tcl_NewStringObj(argv[1], strlen(argv[1]));
+    Tcl_IncrRefCount(lstn->proc);
+    Tcl_CreateFileHandler(lstn->sok, TCL_READABLE, &sockptyr_lstn_handler,
+                          (ClientData)hdl);
+    Tcl_SetObjResult(interp,
+                     Tcl_ObjPrintf("%s%d", handle_prefix, (int)hdl->num));
     return(TCL_OK);
 }
 
@@ -633,9 +725,9 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
                     conn->linked = NULL;
                 }
                 ckfree((void *)conn->buf);
-                ckfree((void *)conn);
                 if (conn->onclose) ckfree(conn->onclose);
                 if (conn->onerror) ckfree(conn->onerror);
+                ckfree((void *)conn);
                 hdl->u.u_conn = NULL;
             }
         }
@@ -654,6 +746,21 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
         }
         break;
 #endif /* USE_INOTIFY */
+    case usage_lstn:
+        {
+            struct sockptyr_lstn *lstn = hdl->u.u_lstn;
+            if (lstn) {
+                if (lstn->sok >= 0) {
+                    Tcl_DeleteFileHandler(lstn->sok);
+                    close(lstn->sok);
+                    lstn->sok = -1;
+                }
+                Tcl_DecrRefCount(lstn->proc);
+                ckfree((void *)lstn);
+                hdl->u.u_lstn = NULL;
+            }
+        }
+        break;
     default:
         /* shouldn't happen */
         --*(unsigned *)1; /* this is intended to crash */
@@ -760,9 +867,10 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     case usage_empty:   Tcl_AppendElement(interp, "empty"); break;
     case usage_conn:    Tcl_AppendElement(interp, "conn"); break;
 #if USE_INOTIFY
-    case usage_inot:    Tcl_AppendElement(interp, "inotify"); break;
+    case usage_inot:    Tcl_AppendElement(interp, "inot"); break;
 #endif
     case usage_exec:    Tcl_AppendElement(interp, "exec"); break;
+    case usage_lstn:    Tcl_AppendElement(interp, "lstn"); break;
     default:
         if (!err[0]) {
             snprintf(err, errsz, "unknown usage value %d", (int)hdl->usage);
@@ -832,6 +940,15 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
 #endif /* USE_INOTIFY */
     case usage_exec:
         /* nothing to do (yet?) */
+        break;
+    case usage_lstn:
+        snprintf(buf, sizeof(buf), "%d sok", (int)hdl->num);
+        Tcl_AppendElement(interp, buf);
+        snprintf(buf, sizeof(buf), "%d", (int)hdl->u.u_lstn->sok);
+        Tcl_AppendElement(interp, buf);
+        snprintf(buf, sizeof(buf), "%d proc", (int)hdl->num);
+        Tcl_AppendElement(interp, buf);
+        Tcl_AppendElement(interp, Tcl_GetString(hdl->u.u_lstn->proc));
         break;
     }
 
@@ -973,9 +1090,11 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
 #endif /* !USE_INOTIFY */
 
 /* Tcl command "sockptyr close" -- Close (delete) something in sockptyr.
- * Can be called on the handle returned by anything that returns one, namely:
+ * Can be called on the handle you get from any of the following:
+ *      sockptyr open_pty
  *      sockptyr connect
  *      sockptyr inotify
+ *      sockptyr listen
  * If this gets called on an already closed handle, nothing happens.
  */
 static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
@@ -1009,6 +1128,9 @@ static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
         break;
 #endif /* USE_INOTIFY */
     case usage_exec:
+        sockptyr_clobber_handle(hdl, 0);
+        break;
+    case usage_lstn:
         sockptyr_clobber_handle(hdl, 0);
         break;
     }
@@ -1275,6 +1397,71 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
     }
 }
 #endif /* USE_INOTIFY */
+
+/* sockptyr_lstn_handler(): Called by the Tcl event loop when a socket
+ * we've listen()ed on receives a connection.  'cd' contains the
+ * 'struct sockptyr_hdl *' associated with that socket.
+ *
+ * Accepts the connection, sets up a sockptyr_hdl for it, and runs
+ * some code with the handle.
+ */
+static void sockptyr_lstn_handler(ClientData cd, int mask)
+{
+    struct sockptyr_hdl *hdl = cd, *chdl;
+    struct sockptyr_data *sd = hdl->sd;
+    Tcl_Interp *interp = sd->interp;
+    struct sockptyr_lstn *lstn;
+    int rv, fd;
+    struct sockaddr_un a;
+    socklen_t l;
+    Tcl_Obj *tclcom;
+
+    /* Sanity checks */
+    assert(hdl != NULL);
+    assert(hdl->usage == usage_lstn);
+    lstn = hdl->u.u_lstn;
+    assert(lstn != NULL);
+    assert(lstn->sok >= 0);
+    assert(mask & TCL_READABLE);
+
+    /* Accept the connection */
+    memset(&a, 0, sizeof(a));
+    l = sizeof(a);
+    fd = accept(lstn->sok, (void *)&a, &l);
+    if (fd < 0) {
+        if (errno == EINTR) {
+            /* transient something or other, not an error; ignore */
+            return;
+        } else {
+            /* some kind of error */
+            fprintf(stderr, "accept(): on %d, failed: %s\n",
+                    (int)lstn->sok, strerror(errno));
+            sockptyr_clobber_handle(hdl, 0);
+            return;
+        }
+    }
+
+    /* Set up a connection handle for it */
+    chdl = sockptyr_allocate_handle(sd);
+    sockptyr_init_conn(chdl, fd, 'a');
+
+    /* Execute the Tcl handler proc */
+    tclcom = Tcl_DuplicateObj(lstn->proc);
+    Tcl_IncrRefCount(tclcom);
+    Tcl_ListObjAppendElement(interp, tclcom,
+                             Tcl_ObjPrintf("%s%d",
+                                           handle_prefix, (int)chdl->num));
+    Tcl_ListObjAppendElement(interp, tclcom, Tcl_ObjPrintf(""));
+    Tcl_Preserve(interp);
+    rv = Tcl_EvalObjEx(interp, tclcom, TCL_EVAL_GLOBAL);
+#if 0 /* is Tcl_BackgroundException() maybe new? */
+        if (result != TCL_OK) {
+            Tcl_BackgroundException(interp, result);
+        }
+#endif
+    Tcl_Release(interp);
+    Tcl_DecrRefCount(tclcom);
+}
 
 /* sockptyr_conn_event() -- handle something happening on a connection,
  * like an error or it being closed, by calling the registered Tcl handler.
