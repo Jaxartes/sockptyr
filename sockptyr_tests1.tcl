@@ -79,10 +79,17 @@ puts stderr "Setting onerror and onclose callbacks on some..."
 proc my_generic_cb {args} {
     puts stderr "!!! [list my_generic_cb $args]"
 }
+sockptyr onclose [lindex $pty_handles 3] "my_generic_cb onclose 3"
 sockptyr onclose [lindex $pty_handles 0] "my_generic_cb onclose 0"
 sockptyr onerror [lindex $pty_handles 1] "my_generic_cb onerror 1"
 sockptyr onclose [lindex $pty_handles 2] "my_generic_cb onclose 2"
-sockptyr onclose [lindex $pty_handles 0]
+sockptyr onclose [lindex $pty_handles 3]
+puts stderr "Done"
+
+puts stderr ""
+puts stderr "Closing a handle (1st PTY -- [lindex $pty_handles 0])"
+sockptyr close [lindex $pty_handles 0]
+update
 puts stderr "Done"
 
 puts stderr ""

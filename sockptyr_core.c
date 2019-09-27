@@ -12,7 +12,7 @@
 #ifndef USE_INOTIFY
 #define USE_INOTIFY 0
 /* Compile with -DUSE_INOTIFY=1 on Linux to take advantage of inotify(7). */
-/* XXX inotify code not tested or even compiled yet */
+/* XXX inotify code not much tested yet */
 #endif
 
 #include <stdio.h>
@@ -185,6 +185,8 @@ static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
 static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
                                 int argc, const char *argv[]);
 #endif /* USE_INOTIFY */
+static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
+                              int argc, const char *argv[]);
 static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec);
 static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
 static void sockptyr_close_conn(struct sockptyr_hdl *hdl);
@@ -248,7 +250,8 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
     } else if (!strcmp(argv[1], "inotify")) {
         return(sockptyr_cmd_inotify(cd, interp, argc - 2, argv + 2));
 #endif /* USE_INOTIFY */
-    /* XXX add: "close" */
+    } else if (!strcmp(argv[1], "close")) {
+        return(sockptyr_cmd_close(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "dbg_handles")) {
         return(sockptyr_cmd_dbg_handles(cd, interp));
     } else {
@@ -656,6 +659,8 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
         --*(unsigned *)1; /* this is intended to crash */
         break;
     }
+
+    hdl->usage = usage_empty;
 }
 
 /* sockptyr_init_conn(): Initialize a sockptyr handle structure for
@@ -967,6 +972,50 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
 }
 #endif /* !USE_INOTIFY */
 
+/* Tcl command "sockptyr close" -- Close (delete) something in sockptyr.
+ * Can be called on the handle returned by anything that returns one, namely:
+ *      sockptyr connect
+ *      sockptyr inotify
+ * If this gets called on an already closed handle, nothing happens.
+ */
+static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
+                              int argc, const char *argv[])
+{
+    struct sockptyr_data *sd = cd;
+    struct sockptyr_hdl *hdl;
+
+    if (argc != 1) {
+        Tcl_SetResult(interp, "usage: sockptyr close $hdl", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    hdl = sockptyr_lookup_handle(sd, argv[0]);
+    if (hdl == NULL) {
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf("handle %s is not a handle",
+                                               argv[0]));
+        return(TCL_ERROR);
+    }
+
+    switch (hdl->usage) {
+    case usage_empty:
+        /* nothing to do */
+        break;
+    case usage_conn:
+        sockptyr_close_conn(hdl);
+        break;
+#if USE_INOTIFY
+    case usage_inotify:
+        sockptyr_clobber_handle(hdl, 0);
+        break;
+#endif /* USE_INOTIFY */
+    case usage_exec:
+        sockptyr_clobber_handle(hdl, 0);
+        break;
+    }
+
+    return(TCL_OK);
+}
+
 /* sockptyr_register_conn_handler(): For the given handle (which is
  * assumed to refer to a connection) set/clear file event handlers as
  * appropriate to handle the events that this connection is able to
@@ -1277,13 +1326,6 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
  */
 static void sockptyr_close_conn(struct sockptyr_hdl *hdl)
 {
-    struct sockptyr_conn *conn = hdl->u.u_conn;
-
-    if (conn->fd >= 0) {
-        Tcl_DeleteFileHandler(conn->fd);
-        close(conn->fd);
-        conn->fd = -1;
-    }
     sockptyr_conn_event(hdl, NULL, NULL);
     sockptyr_clobber_handle(hdl, 0);
 }
