@@ -1124,7 +1124,7 @@ static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
         sockptyr_close_conn(hdl);
         break;
 #if USE_INOTIFY
-    case usage_inotify:
+    case usage_inot:
         sockptyr_clobber_handle(hdl, 0);
         break;
 #endif /* USE_INOTIFY */
@@ -1450,7 +1450,7 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
     Tcl_ListObjAppendElement(interp, tclcom,
                              Tcl_ObjPrintf("%s%d",
                                            handle_prefix, (int)chdl->num));
-    Tcl_ListObjAppendElement(interp, tclcom, Tcl_ObjPrintf(""));
+    Tcl_ListObjAppendElement(interp, tclcom, Tcl_NewObj());
     Tcl_Preserve(interp);
     rv = Tcl_EvalObjEx(interp, tclcom, TCL_EVAL_GLOBAL);
 #if 0 /* is Tcl_BackgroundException() maybe new? */
