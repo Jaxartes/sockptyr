@@ -18,7 +18,7 @@
 set keep 0
 set nctr 0
 set octr 0
-set sokpfx eraseme_tests4sok
+set sokpfx eraseme_churnsok
 
 # initialize
 foreach path {./sockptyr.so ./sockptyr.dylib ./sockptyr.dll} {
@@ -44,16 +44,189 @@ foreach s [glob -nocomplain -types s ${sokpfx}*] {
     catch {file delete $s}
 }
 
+# database that keeps track of what we have open
+
+# $db([list pty hdl $cyc]) - handle of PTY opened cycle $cyc
+# $db([list pty path $cyc]) - name of PTY opened cycle $cyc
+# $db([list lstn hdl $cyc]) - handle of listen socket opened cycle $cyc
+# $db([list lstn path $cyc]) - path of listen socket opened cycle $cyc
+# $db([list inot hdl $cyc]) - handle of inotify watch opened cycle $cyc
+#                             (on this cycle's listen socket)
+# $db([list conns hdl $cyc]) - handles of connections to & from cycle $cyc's
+#                              listening socket
+# $allconns - list of open connection handles
+set allconns [list]
+
+# acremove - remove a handle from $allconns if it's there, fail if not;
+# this is inefficient but in a test program that's ok
+proc acremove {hdl} {
+    global allconns
+    set allconns2 [list]
+    set removed 0
+    foreach hdl2 $allconns {
+        if {$hdl eq $hdl2} {
+            set removed 1
+        } else {
+            lappend allconns2 $hdl2
+        }
+    }
+    if {!$removed} {
+        error "$hdl not found in \$allconns"
+    }
+    set allconns $allconns2
+}
+
+# event callbacks
+proc badcb {args} {
+    # a callback to register when you expect it not to be called
+    puts stderr "Bad callback: $args"
+    exit 1
+}
+
 # single "add" subcycle operation
 proc add {cyc} {
-    puts stderr "XXX add $cyc"
-    # XXX
+    global db sokpfx allconns USE_INOTIFY
+
+    puts stderr "add($cyc)"
+
+    # Open a PTY
+    lassign [sockptyr open_pty] db([list pty hdl $cyc]) db([list pty path $cyc])
+    lappend allconns $db([list pty hdl $cyc])
+    sockptyr onclose $db([list pty hdl $cyc]) [list badcb pty $cyc i]
+    update
+    sockptyr onclose $db([list pty hdl $cyc])
+    update
+    sockptyr onclose $db([list pty hdl $cyc]) [list badcb pty $cyc ii]
+    update
+    sockptyr onclose $db([list pty hdl $cyc]) XXX
+    update
+    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc iii]
+    update
+    sockptyr onerror $db([list pty hdl $cyc])
+    update
+    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc iv]
+    update
+    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc v]
+    update
+    puts stderr "Opened PTY $db([list pty path $cyc])
+
+    # Open a listening socket
+    set db([list lstn path $cyc]) $sokpfx$cyc
+    set db([list lstn hdl $cyc]) \
+        [sockptyr listen $db([list lstn path $cyc]) XXX]
+    puts stderr "Opened listen socket $db([list lstn path $cyc])
+
+    # Connect (twice) to the listening socket
+    set db([list conns hdl $cyc]) [list]
+    for {set i 0} {$i < 2} {incr i} {
+        set conn [sockptyr connect $db([list lstn path $cyc])]
+        for {set j 0} {$j <2} {incr j} {
+            lappend db([list conns hdl $cyc]) $conn
+            lappend allconns $conn
+            sockptyr onclose $conn [list badcb conn $cyc $i $j i]
+            update
+            sockptyr onclose $conn
+            update
+            sockptyr onclose $conn [list badcb conn $cyc $i $j ii]
+            update
+            sockptyr onclose $conn XXX
+            update
+            sockptyr onerror $conn [list badcb conn $cyc $i $j iii]
+            update
+            sockptyr onerror $conn
+            update
+            sockptyr onerror $conn [list badcb conn $cyc $i $j iv]
+            update
+            sockptyr onerror $conn [list badcb conn $cyc $i $j v]
+            update
+            if {$j} {
+                break
+            } else {
+                # get the other end of the connection
+                update
+                set conn XXX
+            }
+        }
+    }
+    update
+    puts stderr "Connected to listen socket $db([list lstn path $cyc]) twice"
+
+    # Link, or relink, or delink, some of our extant connections
+    set c1 [lindex $allconns [expr {int(rand()*[llength $allconns])}]]
+    set c2 [lindex $allconns [expr {int(rand()*[llength $allconns])}]]
+    switch -- [expr {int(rand()*5)}] {
+        0 {
+            puts stderr "Unlinking connection"
+            sockptyr link $c1
+        }
+        1 {
+            puts stderr "Autolinking connection"
+            sockptyr link $c1 $c1
+        }
+        default {
+            puts stderr "Linking connections"
+            sockptyr link $c1 $c2
+        }
+    }
+    update
+    puts stderr "(done)"
+
+    if {$USE_INOTIFY} {
+        # Add an inotify watch, on our listen socket
+        set db([list inot hdl $cyc]) \
+            [sockptyr inotify $db([list lstn path $cyc]) \
+                IN_ATTRIB \
+                XXX]
+        update
+        puts stderr "Added inotify watch on $db([list inot hdl $cyc])"
+        
+        # Make things happen to our inotify watch
+        set t [file mtime $db([list lstn path $cyc])]
+        incr t
+        file mtime $db([list lstn path $cyc])
+        update
+        # XXX confirm it happened
+        puts stderr "Triggered inotify watch"
+    }
 }
 
 # single "del" subcycle operation
 proc del {cyc} {
-    puts stderr "XXX del $cyc"
-    # XXX
+    global db allconns USE_INOTIFY
+
+    puts stderr "del($cyc)"
+
+    if {$USE_INOTIFY} {
+        # Remove an inotify watch
+        sockptyr close $db([list inot hdl $cyc])
+        unset db([list inot hdl $cyc])
+        update
+        puts stderr "Inotify watch on $db([list lstn path $cyc]) removed"
+    }
+
+    # Close listening socket that was opened before; wait for the
+    # connections to it to close
+    set lpath $db([list lstn path $cyc])
+    sockptyr close $db([list lstn hdl $cyc])
+    unset db([list lstn path $cyc])
+    unset db([list lstn hdl $cyc])
+    while {[llength $db([list conns hdl $cyc])]} {
+        # XXX
+        update
+        # XXX
+    }
+    unset db([list conns hdl $cyc])
+    puts stderr "Listening socket $lpath and its connections closed."
+
+    # Close the PTY that was opened before
+    set ppath $db([list pty path $cyc])
+    sockptyr close $db([list pty hdl $cyc])
+    acremove $db([list pty hdl $cyc])
+    update
+    # XXX see that the close handler is called
+    unset db([list pty path $cyc])
+    unset db([list pty hdl $cyc])
+    puts stderr "Closed pty $ppath"
 }
 
 # process directions from the command line
