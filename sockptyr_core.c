@@ -81,8 +81,6 @@ struct sockptyr_inot {
     /* inotify(7) watch specific information in sockptyr */
     int wd; /* watch descriptor used to identify its events */
     Tcl_Obj *proc; /* Tcl code to run when encountered */
-    struct sockptyr_hdl *next; /* linked list of handles with usage_inot */
-    struct sockptyr_hdl **prev; /* make it a one and a half linked list */
 };
 #endif /* USE_INOTIFY */
 
@@ -144,12 +142,21 @@ struct sockptyr_hdl {
     } usage;
 
     union {
-        struct sockptyr_conn *u_conn; /* if usage == usage_conn */
+        /* information specific to particular 'usage' values */
+
+        struct sockptyr_conn u_conn; /* if usage == usage_conn */
 #if USE_INOTIFY
-        struct sockptyr_inot *u_inot; /* if usage == usage_inot */
+        struct sockptyr_inot u_inot; /* if usage == usage_inot */
 #endif /* USE_INOTIFY */
-        struct sockptyr_lstn *u_lstn; /* if usage == usage_lstn */
+        struct sockptyr_lstn u_lstn; /* if usage == usage_lstn */
     } u;
+
+    /* 'next' & 'prev' put handles with particular 'usage' values into
+     * a one-and-a-half linked list.  So far used only used for:
+     *      usage_inot: list head is inotify_hdls in sockptyr_data
+     */
+    struct sockptyr_hdl *next; /* linked list of handles with usage_inot */
+    struct sockptyr_hdl **prev; /* make it a one and a half linked list */
 };
 
 struct sockptyr_data {
@@ -469,7 +476,7 @@ static int sockptyr_cmd_listen(ClientData cd, Tcl_Interp *interp,
     /* get a handle we can use for our result; return a string for it */
     hdl = sockptyr_allocate_handle(sd);
     hdl->usage = usage_lstn;
-    hdl->u.u_lstn = lstn = (void *)ckalloc(sizeof(*lstn));
+    lstn = &(hdl->u.u_lstn);
     memset(lstn, 0, sizeof(*lstn));
     lstn->sok = sok;
     lstn->proc = Tcl_NewStringObj(argv[1], strlen(argv[1]));
@@ -505,13 +512,13 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
             Tcl_SetResult(interp, buf, TCL_VOLATILE);
             return(TCL_ERROR);
         }
-        conns[i] = hdls[i]->u.u_conn;
+        conns[i] = &(hdls[i]->u.u_conn);
     }
 
     /* unlink them from whatever they were on before */
     for (i = 0; i < argc; ++i) {
         if (conns[i]->linked) {
-            conns[i]->linked->u.u_conn->linked = NULL;
+            conns[i]->linked->u.u_conn.linked = NULL;
             conns[i]->linked = NULL;
         }
     }
@@ -584,7 +591,7 @@ static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
         return(TCL_ERROR);
     }
 
-    resp = isonerror ? &(hdl->u.u_conn->onerror) : &(hdl->u.u_conn->onclose);
+    resp = isonerror ? &(hdl->u.u_conn.onerror) : &(hdl->u.u_conn.onclose);
     if (*resp) {
         ckfree(*resp);
         *resp = NULL;
@@ -632,6 +639,8 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
         *hdl = (void *)ckalloc(sizeof(**hdl));
         memset(*hdl, 0, sizeof(**hdl));
         (*hdl)->usage = usage_empty;
+        (*hdl)->next = NULL;
+        (*hdl)->prev = NULL;
         (*hdl)->count = 0;
         (*hdl)->children[0] = NULL;
         (*hdl)->children[1] = NULL;
@@ -713,51 +722,42 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
         break;
     case usage_conn:
         {
-            struct sockptyr_conn *conn = hdl->u.u_conn;
+            struct sockptyr_conn *conn = &(hdl->u.u_conn);
             if (conn) {
                 if (conn->fd >= 0) {
                     Tcl_DeleteFileHandler(conn->fd);
                     close(conn->fd);
-                    conn->fd = -1;
                 }
                 if (conn->linked) {
-                    conn->linked->u.u_conn->linked = NULL;
-                    conn->linked = NULL;
+                    conn->linked->u.u_conn.linked = NULL;
                 }
                 ckfree((void *)conn->buf);
                 if (conn->onclose) ckfree(conn->onclose);
                 if (conn->onerror) ckfree(conn->onerror);
-                ckfree((void *)conn);
-                hdl->u.u_conn = NULL;
             }
         }
         break;
 #if USE_INOTIFY
     case usage_inot:
         {
-            struct sockptyr_inot *inot = hdl->u.u_inot;
+            struct sockptyr_inot *inot = &(hdl->u.u_inot);
             if (inot) {
                 inotify_rm_watch(hdl->sd->inotify_fd, inot->wd);
-                *(inot->prev) = inot->next;
+                *(hdl->prev) = hdl->next;
                 Tcl_DecrRefCount(inot->proc);
-                ckfree((void *)inot);
-                hdl->u.u_inot = NULL;
             }
         }
         break;
 #endif /* USE_INOTIFY */
     case usage_lstn:
         {
-            struct sockptyr_lstn *lstn = hdl->u.u_lstn;
+            struct sockptyr_lstn *lstn = &(hdl->u.u_lstn);
             if (lstn) {
                 if (lstn->sok >= 0) {
                     Tcl_DeleteFileHandler(lstn->sok);
                     close(lstn->sok);
-                    lstn->sok = -1;
                 }
                 Tcl_DecrRefCount(lstn->proc);
-                ckfree((void *)lstn);
-                hdl->u.u_lstn = NULL;
             }
         }
         break;
@@ -768,6 +768,7 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
     }
 
     hdl->usage = usage_empty;
+    memset(&(hdl->u), 0, sizeof(hdl->u));
 }
 
 /* sockptyr_init_conn(): Initialize a sockptyr handle structure for
@@ -780,7 +781,7 @@ static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code)
     struct sockptyr_conn *conn;
 
     hdl->usage = usage_conn;
-    hdl->u.u_conn = conn = (void *)ckalloc(sizeof(*conn));
+    conn = &(hdl->u.u_conn);
     memset(conn, 0, sizeof(*conn));
     conn->fd = fd;
     conn->buf_sz = 4096;
@@ -887,7 +888,7 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     case usage_conn:
         /* connection-specific stuff */
         {
-            struct sockptyr_conn *conn = hdl->u.u_conn;
+            struct sockptyr_conn *conn = &(hdl->u.u_conn);
             snprintf(buf, sizeof(buf), "%d fd", (int)hdl->num);
             Tcl_AppendElement(interp, buf);
             snprintf(buf, sizeof(buf), "%d", (int)conn->fd);
@@ -907,12 +908,12 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
                     snprintf(err, errsz, "on %d link to wrong type",
                              (int)hdl->num);
                 }
-                else if (conn->linked->u.u_conn->linked != hdl && !err[0]) {
+                else if (conn->linked->u.u_conn.linked != hdl && !err[0]) {
                     snprintf(err, errsz, "%d links to %d links to %d",
                              (int)hdl->num,
                              (int)conn->linked->num,
-                             (int)(conn->linked->u.u_conn->linked ?
-                                   conn->linked->u.u_conn->linked->num : -1));
+                             (int)(conn->linked->u.u_conn.linked ?
+                                   conn->linked->u.u_conn.linked->num : -1));
                 }
             }
             if (conn->onclose) {
@@ -931,11 +932,11 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     case usage_inot:
         snprintf(buf, sizeof(buf), "%d wd", (int)hdl->num);
         Tcl_AppendElement(interp, buf);
-        snprintf(buf, sizeof(buf), "%d", (int)hdl->u.u_inot->wd);
+        snprintf(buf, sizeof(buf), "%d", (int)hdl->u.u_inot.wd);
         Tcl_AppendElement(interp, buf);
         snprintf(buf, sizeof(buf), "%d proc", (int)hdl->num);
         Tcl_AppendElement(interp, buf);
-        Tcl_AppendElement(interp, Tcl_GetString(hdl->u.u_inot->proc));
+        Tcl_AppendElement(interp, Tcl_GetString(hdl->u.u_inot.proc));
         break;
 #endif /* USE_INOTIFY */
     case usage_exec:
@@ -944,11 +945,11 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     case usage_lstn:
         snprintf(buf, sizeof(buf), "%d sok", (int)hdl->num);
         Tcl_AppendElement(interp, buf);
-        snprintf(buf, sizeof(buf), "%d", (int)hdl->u.u_lstn->sok);
+        snprintf(buf, sizeof(buf), "%d", (int)hdl->u.u_lstn.sok);
         Tcl_AppendElement(interp, buf);
         snprintf(buf, sizeof(buf), "%d proc", (int)hdl->num);
         Tcl_AppendElement(interp, buf);
-        Tcl_AppendElement(interp, Tcl_GetString(hdl->u.u_lstn->proc));
+        Tcl_AppendElement(interp, Tcl_GetString(hdl->u.u_lstn.proc));
         break;
     }
 
@@ -1073,14 +1074,14 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
     /* set up a handle we can use for our result; and fill it in */
     hdl = sockptyr_allocate_handle(sd);
     hdl->usage = usage_inot;
-    hdl->u.u_inot = inot = (void *)ckalloc(sizeof(*inot));
+    inot = &(hdl->u.u_inot);
     memset(inot, 0, sizeof(*inot));
     inot->wd = wd;
     inot->proc = Tcl_NewStringObj(argv[2], strlen(argv[2]));
     Tcl_IncrRefCount(inot->proc);
-    inot->next = sd->inotify_hdls;
+    hdl->next = sd->inotify_hdls;
     sd->inotify_hdls = hdl;
-    inot->prev = &(sd->inotify_hdls);
+    hdl->prev = &(sd->inotify_hdls);
 
     /* return a handle string identifying it */
     Tcl_SetObjResult(interp, Tcl_ObjPrintf("%s%d",
@@ -1146,7 +1147,7 @@ static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
 static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl)
 {
     int mask = 0;
-    struct sockptyr_conn *conn = hdl->u.u_conn;
+    struct sockptyr_conn *conn = &(hdl->u.u_conn);
 
     if (conn->fd < 0) {
         /* nothing to do */
@@ -1157,7 +1158,7 @@ static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl)
         /* buffer isn't full; we can receive into it */
         mask |= TCL_READABLE;
     }
-    if (conn->linked && !conn->linked->u.u_conn->buf_empty) {
+    if (conn->linked && !conn->linked->u.u_conn.buf_empty) {
         /* linked connection's buffer isn't empty; we can send from it */
         mask |= TCL_WRITABLE;
     }
@@ -1183,8 +1184,7 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
     /* Sanity checks */
     assert(hdl != NULL);
     assert(hdl->usage == usage_conn);
-    conn = hdl->u.u_conn;
-    assert(conn != NULL);
+    conn = &(hdl->u.u_conn);
 
 #if 0
     fprintf(stderr, "sockptyr_conn_handler() on %d mask %d\n",
@@ -1242,9 +1242,9 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
      * buffer
      */
     if ((mask & TCL_WRITABLE) && conn->linked &&
-        !conn->linked->u.u_conn->buf_empty) {
+        !conn->linked->u.u_conn.buf_empty) {
 
-        lconn = conn->linked->u.u_conn;
+        lconn = &(conn->linked->u.u_conn);
         if (lconn->buf_in > conn->buf_out) {
             len = lconn->buf_in - lconn->buf_out;
         } else {
@@ -1357,8 +1357,8 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
         }
 
         /* Find our own watch information about ie->wd */
-        for (hdl = sd->inotify_hdls; hdl; hdl = hdl->u.u_inot->next) {
-            if (ie->wd == hdl->u.u_inot->wd)
+        for (hdl = sd->inotify_hdls; hdl; hdl = hdl->next) {
+            if (ie->wd == hdl->u.u_inot.wd)
                 break;
         }
         if (!hdl) {
@@ -1368,7 +1368,7 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
             sd->inotify_fd = -1;
             continue;
         }
-        inot = hdl->u.u_inot;
+        inot = &(hdl->u.u_inot);
 
         /* append additional info to inot->proc and call it */
         tclcom = Tcl_DuplicateObj(inot->proc);
@@ -1419,8 +1419,7 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
     /* Sanity checks */
     assert(hdl != NULL);
     assert(hdl->usage == usage_lstn);
-    lstn = hdl->u.u_lstn;
-    assert(lstn != NULL);
+    lstn = &(hdl->u.u_lstn);
     assert(lstn->sok >= 0);
     assert(mask & TCL_READABLE);
 
@@ -1473,7 +1472,7 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
                                 char *errkw, char *errstr)
 {
-    struct sockptyr_conn *conn = hdl->u.u_conn;
+    struct sockptyr_conn *conn = &(hdl->u.u_conn);
     struct sockptyr_data *sd = hdl->sd;
     Tcl_Interp *interp = sd->interp;
     Tcl_Obj *cmd;
