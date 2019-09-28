@@ -83,9 +83,21 @@ proc badcb {args} {
     exit 1
 }
 
+set accepted [list]
+proc accept_proc {cyc hdl es} {
+    # a callback to register for listening for connections
+    # it'll append each connection's information to the global
+    # $accepted in the form of two list entries:
+    #       $cyc
+    #       $hdl
+    global accepted
+    lappend accepted $cyc $hdl
+    puts stderr "Accepted: $hdl (cyc=$cyc)"
+}
+
 # single "add" subcycle operation
 proc add {cyc} {
-    global db sokpfx allconns USE_INOTIFY
+    global db sokpfx allconns USE_INOTIFY accepted
 
     puts stderr "add($cyc)"
 
@@ -108,19 +120,22 @@ proc add {cyc} {
     update
     sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc v]
     update
-    puts stderr "Opened PTY $db([list pty path $cyc])
+    puts stderr "Opened PTY $db([list pty path $cyc])"
+    puts stderr "Allocated handle is $db([list pty hdl $cyc])"
 
     # Open a listening socket
     set db([list lstn path $cyc]) $sokpfx$cyc
     set db([list lstn hdl $cyc]) \
-        [sockptyr listen $db([list lstn path $cyc]) XXX]
-    puts stderr "Opened listen socket $db([list lstn path $cyc])
+        [sockptyr listen $db([list lstn path $cyc]) \
+            [list accept_proc $cyc]]
+    puts stderr "Opened listen socket $db([list lstn path $cyc])"
 
     # Connect (twice) to the listening socket
     set db([list conns hdl $cyc]) [list]
     for {set i 0} {$i < 2} {incr i} {
         set conn [sockptyr connect $db([list lstn path $cyc])]
         for {set j 0} {$j <2} {incr j} {
+            puts stderr [list XXX i $i j $j conn $conn]
             lappend db([list conns hdl $cyc]) $conn
             lappend allconns $conn
             sockptyr onclose $conn [list badcb conn $cyc $i $j i]
@@ -144,7 +159,20 @@ proc add {cyc} {
             } else {
                 # get the other end of the connection
                 update
-                set conn XXX
+                while {![llength $accepted]} {
+                    update
+                }
+                update
+                foreach {acyc ahdl} $accepted {
+                    if {$acyc != $cyc} {
+                        error "Unexpectedly accepted connection on listen socket from cycle $acyc during cycle $cyc"
+                    } else {
+                        set conn $ahdl
+                    }
+                }
+                if {[llength $accepted] > 2} {
+                    error "More connections than expected!"
+                }
             }
         }
     }
@@ -182,7 +210,7 @@ proc add {cyc} {
         
         # Make things happen to our inotify watch
         set t [file mtime $db([list lstn path $cyc])]
-        incr t
+        incr t -3
         file mtime $db([list lstn path $cyc])
         update
         # XXX confirm it happened
