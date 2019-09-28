@@ -1,5 +1,5 @@
 #!/usr/bin/tclsh
-# sockptyr_tests2.tcl
+# sockptyr_tests_ptyl.tcl
 # Copyright (C) 2019, Jeremy Dilatush.  All rights reserved.
 #
 # Test program for sockptyr.  Not a full test by any means, and also not

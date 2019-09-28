@@ -1,5 +1,5 @@
 #!/usr/bin/tclsh
-# sockptyr_tests4.tcl
+# sockptyr_tests_churn.tcl
 # Copyright (C) 2019, Jeremy Dilatush.  All rights reserved.
 #
 # Test program for sockptyr.  Not a full test by any means, and also not
