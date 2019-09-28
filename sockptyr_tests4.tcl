@@ -3,7 +3,7 @@
 # Copyright (C) 2019, Jeremy Dilatush.  All rights reserved.
 #
 # Test program for sockptyr.  Not a full test by any means, and also not
-# the automatable basic tests as in sockptyr_tests1.tcl.  What this one
+# the automatable basic tests as in sockptyr_tests_auto.tcl.  What this one
 # does is "churn" handles and other things within sockptyr, so you can
 # look for leaks and the like.
 #

@@ -1,5 +1,5 @@
 #!/usr/bin/tclsh
-# sockptyr_tests1.tcl
+# sockptyr_tests_auto.tcl
 # Copyright (C) 2019, Jeremy Dilatush.  All rights reserved.
 #
 # Some basic tests for the "C" part of "sockptyr".  These are not going
@@ -7,7 +7,7 @@
 # execution at build time.
 #
 # Run with the following command line:
-#       tclsh sockptyr_tests1.tcl [-hang] $path_to_dyl $use_inotify
+#       tclsh sockptyr_tests_auto.tcl [-hang] $path_to_dyl $use_inotify
 # where
 #       "-hang" if specified causes the script to wait 5 minutes before ending
 #       $path_to_dyl is the path to the dynamic library file (called a .so
