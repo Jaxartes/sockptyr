@@ -131,6 +131,7 @@ struct sockptyr_hdl {
 
     enum {
         usage_empty, /* just a placeholder, not counted, available for use */
+        usage_dead, /* allocated but not usable */
         usage_conn, /* a connection, identifiable by handle */
 #if USE_INOTIFY
         usage_inot, /* something monitored with "sockptyr inotify" */
@@ -153,10 +154,11 @@ struct sockptyr_hdl {
 
     /* 'next' & 'prev' put handles with particular 'usage' values into
      * a one-and-a-half linked list.  So far used only used for:
-     *      usage_inot: list head is inotify_hdls in sockptyr_data
+     *      usage_inot: list head is inotify_hdls in struct sockptyr_data
+     *      usage_empty: list head is empty_hdls in struct sockptyr_data
      */
-    struct sockptyr_hdl *next; /* linked list of handles with usage_inot */
-    struct sockptyr_hdl **prev; /* make it a one and a half linked list */
+    struct sockptyr_hdl *next;
+    struct sockptyr_hdl **prev;
 };
 
 struct sockptyr_data {
@@ -164,6 +166,7 @@ struct sockptyr_data {
 
     Tcl_Interp *interp; /* interpreter for event handling etc */
     struct sockptyr_hdl *rhdl; /* root handle "sockptyr_0" */
+    struct sockptyr_hdl *empty_hdls; /* handles with usage_empty */
 #if USE_INOTIFY
     int inotify_fd; /* file descriptor for inotify(7) */
     struct sockptyr_hdl *inotify_hdls; /* handles with usage_inot */
@@ -634,13 +637,13 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
         num = num * 2 + 1 + branch;
     }
 
-    if (!*hdl) {
+    if (*hdl) {
+        /* handle no longer free */
+        *((*hdl)->prev) = (*hdl)->next;
+    } else {
         /* allocate a new one */
         *hdl = (void *)ckalloc(sizeof(**hdl));
         memset(*hdl, 0, sizeof(**hdl));
-        (*hdl)->usage = usage_empty;
-        (*hdl)->next = NULL;
-        (*hdl)->prev = NULL;
         (*hdl)->count = 0;
         (*hdl)->children[0] = NULL;
         (*hdl)->children[1] = NULL;
@@ -648,11 +651,14 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
         (*hdl)->parent = parent;
         (*hdl)->sd = sd;
     }
+    (*hdl)->next = NULL;
+    (*hdl)->prev = NULL;
 
     /* account for it being put to use */
     for (thumb = *hdl; thumb; thumb = thumb->parent) {
         thumb->count++;
     }
+    (*hdl)->usage = usage_dead;
 
     return(*hdl);
 }
@@ -685,7 +691,7 @@ static struct sockptyr_hdl *sockptyr_lookup_handle(struct sockptyr_data *sd,
         hdl = hdl->children[branch];
     }
     if (hdl && hdl->usage == usage_empty) {
-        hdl = NULL; /* handle not in use */
+        hdl = NULL; /* handle not allocated */
     }
     return(hdl);
 }
@@ -718,6 +724,9 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
 
     switch (hdl->usage) {
     case usage_empty:
+        /* nothing more to do */
+        break;
+    case usage_dead:
         /* nothing more to do */
         break;
     case usage_conn:
@@ -768,6 +777,8 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
     }
 
     hdl->usage = usage_empty;
+    hdl->next = hdl->sd->empty_hdls;
+    hdl->prev = &(hdl->sd->empty_hdls);
     memset(&(hdl->u), 0, sizeof(hdl->u));
 }
 
@@ -866,6 +877,7 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     Tcl_AppendElement(interp, buf);
     switch (hdl->usage) {
     case usage_empty:   Tcl_AppendElement(interp, "empty"); break;
+    case usage_dead:    Tcl_AppendElement(interp, "dead"); break;
     case usage_conn:    Tcl_AppendElement(interp, "conn"); break;
 #if USE_INOTIFY
     case usage_inot:    Tcl_AppendElement(interp, "inot"); break;
@@ -883,6 +895,10 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
 
     switch (hdl->usage) {
     case usage_empty:
+        /* nothing to do */
+        /* XXX or maybe report/check the 1.5ll of empty handles */
+        break;
+    case usage_dead:
         /* nothing to do */
         break;
     case usage_conn:
@@ -1119,6 +1135,9 @@ static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
     switch (hdl->usage) {
     case usage_empty:
         /* nothing to do */
+        break;
+    case usage_dead:
+        sockptyr_clobber_handle(hdl, 0);
         break;
     case usage_conn:
         sockptyr_close_conn(hdl);
