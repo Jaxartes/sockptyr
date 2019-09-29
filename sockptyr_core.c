@@ -185,13 +185,13 @@ static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
                                         char *what, int isonerror);
 static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp);
 static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
-                                         struct sockptyr_hdl *hdl, int num,
-                                         char *err, int errsz);
+                                     struct sockptyr_hdl *hdl, int num,
+                                     char *err, int errsz);
 static void sockptyr_dbg_handles_15ll(Tcl_Interp *interp,
-                                          struct sockptyr_data *sd,
-                                          struct sockptyr_hdl **hdls,
-                                          enum usage usage, const char *lbl,
-                                          char *err, int errsz);
+                                      struct sockptyr_data *sd,
+                                      struct sockptyr_hdl **hdls,
+                                      enum usage usage, const char *lbl,
+                                      char *err, int errsz);
 static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
 #if USE_INOTIFY
@@ -208,6 +208,9 @@ static void sockptyr_conn_handler(ClientData cd, int mask);
 static void sockptyr_lstn_handler(ClientData cd, int mask);
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
                                 char *errkw, char *errstr);
+static void sockptyr_15ll_insert(struct sockptyr_hdl **head,
+                                 struct sockptyr_hdl *hdl);
+static void sockptyr_15ll_remove(struct sockptyr_hdl *hdl);
 #if USE_INOTIFY
 static void sockptyr_inot_handler(ClientData cd, int mask);
 static Tcl_Obj *sockptyr_inot_flagrep(Tcl_Interp *interp, uint32_t flags);
@@ -632,14 +635,13 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
             hdl->sd = sd;
             hdl->num = i;
             hdl->usage = usage_empty;
-            hdl->next = sd->empty_hdls;
-            hdl->prev = &(sd->empty_hdls);
+            sockptyr_15ll_insert(&(sd->empty_hdls), hdl);
         }
     }
 
     /* pick one of the empty handles in the 1.5-linked-list of them */
     hdl = sd->empty_hdls;
-    sd->empty_hdls = hdl->next;
+    sockptyr_15ll_remove(hdl);
 
     /* prepare it */
     hdl->next = NULL;
@@ -719,7 +721,7 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl)
             struct sockptyr_inot *inot = &(hdl->u.u_inot);
             if (inot) {
                 inotify_rm_watch(hdl->sd->inotify_fd, inot->wd);
-                *(hdl->prev) = hdl->next;
+                sockptyr_15ll_remove(hdl);
                 Tcl_DecrRefCount(inot->proc);
             }
         }
@@ -744,8 +746,7 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl)
     }
 
     hdl->usage = usage_empty;
-    hdl->next = hdl->sd->empty_hdls;
-    hdl->prev = &(hdl->sd->empty_hdls);
+    sockptyr_15ll_insert(&(hdl->sd->empty_hdls), hdl);
     memset(&(hdl->u), 0, sizeof(hdl->u));
 }
 
@@ -785,7 +786,7 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
     Tcl_SetResult(interp, "", TCL_STATIC);
     err[0] = '\0';
     for (i = 0; i < sd->ahdls; ++i) {
-        sockptyr_dbg_handles_one(interp, sd->hdls[i], 0, err, sizeof(err));
+        sockptyr_dbg_handles_one(interp, sd->hdls[i], i, err, sizeof(err));
     }
     
     sockptyr_dbg_handles_15ll(interp, sd,
@@ -793,7 +794,7 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
                               err, sizeof(err));
 #if USE_INOTIFY
     sockptyr_dbg_handles_15ll(interp, sd,
-                              &(sd->inotify_hdls), usage_inotify, "inot",
+                              &(sd->inotify_hdls), usage_inot, "inot",
                               err, sizeof(err));
 #endif
 
@@ -809,8 +810,8 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
  * sockptyr_cmd_dbg_handles().
  */
 static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
-                                         struct sockptyr_hdl *hdl, int num,
-                                         char *err, int errsz)
+                                     struct sockptyr_hdl *hdl, int num,
+                                     char *err, int errsz)
 {
     char buf[512];
 
@@ -921,10 +922,10 @@ static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
  * of handles of a particular usage type, as part of sockptyr_cmd_dbg_handles().
  */
 static void sockptyr_dbg_handles_15ll(Tcl_Interp *interp,
-                                          struct sockptyr_data *sd,
-                                          struct sockptyr_hdl **hdls,
-                                          enum usage usage, const char *lbl,
-                                          char *err, int errsz)
+                                      struct sockptyr_data *sd,
+                                      struct sockptyr_hdl **hdls,
+                                      enum usage usage, const char *lbl,
+                                      char *err, int errsz)
 {
     int lcnt, acnt, i;
     struct sockptyr_hdl **thumb;
@@ -1090,9 +1091,7 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
     inot->wd = wd;
     inot->proc = Tcl_NewStringObj(argv[2], strlen(argv[2]));
     Tcl_IncrRefCount(inot->proc);
-    hdl->next = sd->inotify_hdls;
-    sd->inotify_hdls = hdl;
-    hdl->prev = &(sd->inotify_hdls);
+    sockptyr_15ll_insert(&(sd->inotify_hdls), hdl);
 
     /* return a handle string identifying it */
     Tcl_SetObjResult(interp, Tcl_ObjPrintf("%s%d",
@@ -1563,3 +1562,29 @@ static Tcl_Obj *sockptyr_inot_flagrep(Tcl_Interp *interp, uint32_t flags)
     return(o);
 }
 #endif /* USE_INOTIFY */
+
+/* sockptyr_15ll_insert() -- Insert a handle into a "1.5-linked list". */
+static void sockptyr_15ll_insert(struct sockptyr_hdl **head,
+                                 struct sockptyr_hdl *hdl)
+{
+    /* insert into head position */
+    hdl->next = *head;
+    if (*head) {
+        (*head)->prev = &(hdl->next);
+    }
+    hdl->prev = head;
+    *head = hdl;
+}
+
+/* sockptyr_15ll_remove() -- Remove a handle from a "1.5-linked list". */
+static void sockptyr_15ll_remove(struct sockptyr_hdl *hdl)
+{
+    /* remove from wherever it is */
+    if (hdl->next) {
+        hdl->next->prev = hdl->prev;
+    }
+    *(hdl->prev) = hdl->next;
+    hdl->next = NULL;
+    hdl->prev = NULL;
+}
+
