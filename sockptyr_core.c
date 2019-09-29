@@ -112,24 +112,11 @@ struct sockptyr_lstn {
 };
 
 struct sockptyr_hdl {
-    /* Info about a single handle in sockptyr.  They're
-     * organized in a kind of tree under 'struct sockptyr_data', its
-     * structure associated with their handle strings:
-     *      sd->rhdl is "sockptyr_0"
-     *      sd->rhdl->children[0] is "sockptyr_1"
-     *      sd->rhdl->children[1] is "sockptyr_2"
-     *      sd->rhdl->children[0]->children[0] is "sockptyr_3"
-     *      generally the relation is:
-     *          node->children[m]->num == node->num * 2 + m + 1
-     * For each node sh, sh->count is a count of that handle and
-     * all its descendants that are currently allocated.
-     */
+    /* Info about a single handle in sockptyr. */
     struct sockptyr_data *sd; /* global data */
     int num; /* handle number */
-    struct sockptyr_hdl *children[2], *parent;
-    int count;
 
-    enum {
+    enum usage {
         usage_empty, /* just a placeholder, not counted, available for use */
         usage_dead, /* allocated but not usable */
         usage_conn, /* a connection, identifiable by handle */
@@ -165,8 +152,9 @@ struct sockptyr_data {
     /* state of the whole sockptyr instance on a given interpreter */
 
     Tcl_Interp *interp; /* interpreter for event handling etc */
-    struct sockptyr_hdl *rhdl; /* root handle "sockptyr_0" */
     struct sockptyr_hdl *empty_hdls; /* handles with usage_empty */
+    struct sockptyr_hdl **hdls; /* handles that have been created */
+    int ahdls; /* count of entries in hdls[] */
 #if USE_INOTIFY
     int inotify_fd; /* file descriptor for inotify(7) */
     struct sockptyr_hdl *inotify_hdls; /* handles with usage_inot */
@@ -196,9 +184,14 @@ static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
                                         int argc, const char *argv[],
                                         char *what, int isonerror);
 static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp);
-static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
+static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
                                          struct sockptyr_hdl *hdl, int num,
                                          char *err, int errsz);
+static void sockptyr_dbg_handles_15ll(Tcl_Interp *interp,
+                                          struct sockptyr_data *sd,
+                                          struct sockptyr_hdl **hdls,
+                                          enum usage usage, const char *lbl,
+                                          char *err, int errsz);
 static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
 #if USE_INOTIFY
@@ -207,7 +200,7 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
 #endif /* USE_INOTIFY */
 static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
                               int argc, const char *argv[]);
-static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec);
+static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl);
 static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
 static void sockptyr_close_conn(struct sockptyr_hdl *hdl);
 static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
@@ -234,10 +227,13 @@ int Sockptyr_Init(Tcl_Interp *interp)
 
     sd = (void *)ckalloc(sizeof(*sd));
     memset(sd, 0, sizeof(*sd));
-    sd->rhdl = NULL;
+    sd->hdls = NULL;
+    sd->ahdls = 0;
+    sd->empty_hdls = NULL;
     sd->interp = interp;
 #if USE_INOTIFY
     sd->inotify_fd = -1;
+    sd->inotify_hdls = NULL;
 #endif /* USE_INOTIFY */
 
     Tcl_CreateCommand(interp, "sockptyr",
@@ -289,8 +285,17 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
 static void sockptyr_cleanup(ClientData cd)
 {
     struct sockptyr_data *sd = cd;
+    int i;
 
-    sockptyr_clobber_handle(sd->rhdl, 1);
+    for (i = 0; i < sd->ahdls; ++i) {
+        sockptyr_clobber_handle(sd->hdls[i]);
+        ckfree((void *)sd->hdls[i]);
+    }
+    if (sd->hdls) {
+        ckfree((void *)sd->hdls);
+    }
+    sd->hdls = NULL;
+    sd->ahdls = 0;
 #if USE_INOTIFY
     if (sd->inotify_fd >= 0) {
         Tcl_DeleteFileHandler(sd->inotify_fd);
@@ -608,59 +613,40 @@ static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
 }
 
 /* sockptyr_allocate_handle() -- Find an unused handle or create it and
- * return a pointer to it.  Also adjusts the 'count' value(s) above it.
+ * return a pointer to it.
  */
 static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
 {
-    int num; /* handle number */
-    struct sockptyr_hdl **hdl; /* handle struct or where it would go */
-    struct sockptyr_hdl *thumb, *parent;
-    int branch;
+    struct sockptyr_hdl *hdl;
 
-    /* find something low and empty, or where it would go */
-    num = 0;
-    hdl = &(sd->rhdl);
-    parent = NULL;
-    while (*hdl && (*hdl)->usage != usage_empty) {
-        if (!(*hdl)->children[0]) {
-            branch = 0;
-        } else if (!(*hdl)->children[1]) {
-            branch = 1;
-        } else if ((*hdl)->children[0]->count <=
-                   (*hdl)->children[1]->count) {
-            branch = 0;
-        } else {
-            branch = 1;
+    if (sd->empty_hdls == NULL) {
+        /* we need some empty handles */
+        int i = sd->ahdls;
+
+        sd->ahdls += 1 + (sd->ahdls >> 2);
+        sd->hdls = (void *)ckrealloc((void *)sd->hdls,
+                                     sizeof(sd->hdls[0]) * sd->ahdls);
+        for (; i < sd->ahdls; ++i) {
+            hdl = sd->hdls[i] = (void *)ckalloc(sizeof(*hdl));
+            memset(hdl, 0, sizeof(*hdl));
+            hdl->sd = sd;
+            hdl->num = i;
+            hdl->usage = usage_empty;
+            hdl->next = sd->empty_hdls;
+            hdl->prev = &(sd->empty_hdls);
         }
-        parent = *hdl;
-        hdl = &((*hdl)->children[branch]);
-        num = num * 2 + 1 + branch;
     }
 
-    if (*hdl) {
-        /* handle no longer free */
-        *((*hdl)->prev) = (*hdl)->next;
-    } else {
-        /* allocate a new one */
-        *hdl = (void *)ckalloc(sizeof(**hdl));
-        memset(*hdl, 0, sizeof(**hdl));
-        (*hdl)->count = 0;
-        (*hdl)->children[0] = NULL;
-        (*hdl)->children[1] = NULL;
-        (*hdl)->num = num;
-        (*hdl)->parent = parent;
-        (*hdl)->sd = sd;
-    }
-    (*hdl)->next = NULL;
-    (*hdl)->prev = NULL;
+    /* pick one of the empty handles in the 1.5-linked-list of them */
+    hdl = sd->empty_hdls;
+    sd->empty_hdls = hdl->next;
 
-    /* account for it being put to use */
-    for (thumb = *hdl; thumb; thumb = thumb->parent) {
-        thumb->count++;
-    }
-    (*hdl)->usage = usage_dead;
+    /* prepare it */
+    hdl->next = NULL;
+    hdl->prev = NULL;
+    hdl->usage = usage_dead;
 
-    return(*hdl);
+    return(hdl);
 }
 
 /* sockptyr_lookup_handle() -- look up the specified handle, and return
@@ -669,7 +655,7 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
 static struct sockptyr_hdl *sockptyr_lookup_handle(struct sockptyr_data *sd,
                                                    const char *hdls)
 {
-    int hdln, branch;
+    int hdln;
     struct sockptyr_hdl *hdl;
 
     if (!hdls) {
@@ -682,45 +668,26 @@ static struct sockptyr_hdl *sockptyr_lookup_handle(struct sockptyr_data *sd,
     if (hdln < 0) {
         return(NULL); /* not a handle */
     }
-
-    hdl = sd->rhdl;
-    while (hdl && hdln) {
-        hdln -= 1;
-        branch = hdln & 1;
-        hdln >>= 1;
-        hdl = hdl->children[branch];
+    if (hdln >= sd->ahdls) {
+        return(NULL); /* this handle number has never been allocated */
     }
-    if (hdl && hdl->usage == usage_empty) {
-        hdl = NULL; /* handle not allocated */
+
+    hdl = sd->hdls[hdln];
+
+    if (hdl->usage == usage_empty) {
+        return(NULL); /* handle not allocated */
     }
     return(hdl);
 }
 
-/* sockptyr_clobber_handle() -- Clean up handle 'hdl' and
- * all others under it.  This could, sometimes, free the sockptyr_hdl,
+/* sockptyr_clobber_handle() -- Clean up handle 'hdl'.
+ * This could, sometimes, free the sockptyr_hdl,
  * but doesn't; simpler to leave it around unused until/unless we want
- * it again.  If 'rec' is nonzero, will recurse to subtrees.
+ * it again.
  */
-static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int rec)
+static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl)
 {
-    struct sockptyr_hdl *thumb;
-
     if (!hdl) return; /* nothing to do */
-
-    for (thumb = hdl; thumb; thumb = thumb->parent) {
-        if (thumb->usage != usage_empty) {
-            thumb->count--;
-        }
-    }
-
-    if (rec && hdl->children[0]) {
-        sockptyr_clobber_handle(hdl->children[0], rec);
-        hdl->children[0] = NULL;
-    }
-    if (rec && hdl->children[1]) {
-        sockptyr_clobber_handle(hdl->children[1], rec);
-        hdl->children[1] = NULL;
-    }
 
     switch (hdl->usage) {
     case usage_empty:
@@ -813,10 +780,23 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
 {
     char err[512];
     struct sockptyr_data *sd = cd;
+    int i;
 
     Tcl_SetResult(interp, "", TCL_STATIC);
     err[0] = '\0';
-    sockptyr_cmd_dbg_handles_rec(interp, sd->rhdl, 0, err, sizeof(err));
+    for (i = 0; i < sd->ahdls; ++i) {
+        sockptyr_dbg_handles_one(interp, sd->hdls[i], 0, err, sizeof(err));
+    }
+    
+    sockptyr_dbg_handles_15ll(interp, sd,
+                              &(sd->empty_hdls), usage_empty, "empty",
+                              err, sizeof(err));
+#if USE_INOTIFY
+    sockptyr_dbg_handles_15ll(interp, sd,
+                              &(sd->inotify_hdls), usage_inotify, "inot",
+                              err, sizeof(err));
+#endif
+
     if (err[0]) {
         Tcl_AppendElement(interp, "err");
         Tcl_AppendElement(interp, err);
@@ -825,14 +805,13 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
     return(TCL_OK);
 }
 
-/* sockptyr_cmd_dbg_handles_rec() -- recursive part of
+/* sockptyr_dbg_handles_one() -- Do one handle's part of
  * sockptyr_cmd_dbg_handles().
  */
-static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
+static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
                                          struct sockptyr_hdl *hdl, int num,
                                          char *err, int errsz)
 {
-    int i, ecount;
     char buf[512];
 
     if (hdl == NULL) return; /* nothing to do */
@@ -840,37 +819,6 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
     if (hdl->num != num && !err[0]) {
         snprintf(err, errsz, "num wrong, got %d exp %d",
                  (int)hdl->num, (int)num);
-    }
-    ecount = ((hdl->children[0] ? hdl->children[0]->count : 0) +
-              (hdl->children[1] ? hdl->children[1]->count : 0) +
-              (hdl->usage != usage_empty ? 1 : 0));
-    if (hdl->count != ecount && !err[0]) {
-        snprintf(err, errsz, "on %d count wrong, got %d exp %d",
-                 (int)hdl->num, (int)hdl->count, (int)ecount);
-    }
-
-    snprintf(buf, sizeof(buf), "%d count", (int)hdl->num);
-    Tcl_AppendElement(interp, buf);
-    snprintf(buf, sizeof(buf), "%d", (int)hdl->count);
-    Tcl_AppendElement(interp, buf);
-
-    for (i = 0; i < 2; ++i) {
-        snprintf(buf, sizeof(buf), "%d children %d", (int)hdl->num, (int)i);
-        Tcl_AppendElement(interp, buf);
-        if (hdl->children[i]) {
-            snprintf(buf, sizeof(buf), "%d", (int)hdl->children[i]->num);
-            if (hdl->children[i]->parent != hdl && !err[0]) {
-                snprintf(err, errsz,
-                         "on %d bad parent pointer, got %d exp %d",
-                         (int)hdl->children[i]->num,
-                         (int)(hdl->children[i]->parent ?
-                               hdl->children[i]->parent->num : -1),
-                         (int)hdl->num);
-            }
-        } else {
-            buf[0] = '\0';
-        }
-        Tcl_AppendElement(interp, buf);
     }
 
     snprintf(buf, sizeof(buf), "%d usage", (int)hdl->num);
@@ -895,8 +843,7 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
 
     switch (hdl->usage) {
     case usage_empty:
-        /* nothing to do */
-        /* XXX or maybe report/check the 1.5ll of empty handles */
+        /* nothing very interesting to do */
         break;
     case usage_dead:
         /* nothing to do */
@@ -968,12 +915,60 @@ static void sockptyr_cmd_dbg_handles_rec(Tcl_Interp *interp,
         Tcl_AppendElement(interp, Tcl_GetString(hdl->u.u_lstn.proc));
         break;
     }
+}
 
-    for (i = 0; i < 2; ++i) {
-        if (hdl->children[i]) {
-            sockptyr_cmd_dbg_handles_rec(interp, hdl->children[i],
-                                         hdl->num * 2 + 1 + i, err, errsz);
+/* sockptyr_dbg_handles_one() -- Check one of the "1.5 linked lists"
+ * of handles of a particular usage type, as part of sockptyr_cmd_dbg_handles().
+ */
+static void sockptyr_dbg_handles_15ll(Tcl_Interp *interp,
+                                          struct sockptyr_data *sd,
+                                          struct sockptyr_hdl **hdls,
+                                          enum usage usage, const char *lbl,
+                                          char *err, int errsz)
+{
+    int lcnt, acnt, i;
+    struct sockptyr_hdl **thumb;
+
+    if (err[0]) {
+        /* if there's already an error reported don't check any more */
+        return;
+    }
+
+    /* Go through the list checking that it contains handles that are
+     * right and that it's linked properly.  Also count the handles.
+     */
+    for (lcnt = 0, thumb = hdls; *thumb; thumb = &((*thumb)->next)) {
+        ++lcnt;
+        if (thumb != (*thumb)->prev) {
+            snprintf(err, errsz,
+                     "handle %d has wrong 'prev' link exp %p got %p",
+                     (int)(*thumb)->num, thumb, (*thumb)->prev);
+            return;
         }
+        if ((*thumb)->usage != usage) {
+            snprintf(err, errsz,
+                     "handle %d has wrong usage type exp %d got %d in"
+                     " the %s list",
+                     (int)(*thumb)->num, (int)usage,
+                     (int)(*thumb)->usage, lbl);
+            return;
+        }
+    }
+
+    /* And go through the array of handles to count the number of handles
+     * with this usage type
+     */
+    for (i = acnt = 0; i < sd->ahdls; ++i) {
+        if (sd->hdls[i]->usage == usage) {
+            ++acnt;
+        }
+    }
+    if (lcnt != acnt) {
+        snprintf(err, errsz,
+                 "the %s list has %d handles out of the %d with that"
+                 " type -- some are missing",
+                 lbl, (int)lcnt, (int)acnt);
+        return;
     }
 }
 
@@ -1137,21 +1132,21 @@ static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
         /* nothing to do */
         break;
     case usage_dead:
-        sockptyr_clobber_handle(hdl, 0);
+        sockptyr_clobber_handle(hdl);
         break;
     case usage_conn:
         sockptyr_close_conn(hdl);
         break;
 #if USE_INOTIFY
     case usage_inot:
-        sockptyr_clobber_handle(hdl, 0);
+        sockptyr_clobber_handle(hdl);
         break;
 #endif /* USE_INOTIFY */
     case usage_exec:
-        sockptyr_clobber_handle(hdl, 0);
+        sockptyr_clobber_handle(hdl);
         break;
     case usage_lstn:
-        sockptyr_clobber_handle(hdl, 0);
+        sockptyr_clobber_handle(hdl);
         break;
     }
 
@@ -1454,7 +1449,7 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
             /* some kind of error */
             fprintf(stderr, "accept(): on %d, failed: %s\n",
                     (int)lstn->sok, strerror(errno));
-            sockptyr_clobber_handle(hdl, 0);
+            sockptyr_clobber_handle(hdl);
             return;
         }
     }
@@ -1532,7 +1527,7 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
 static void sockptyr_close_conn(struct sockptyr_hdl *hdl)
 {
     sockptyr_conn_event(hdl, NULL, NULL);
-    sockptyr_clobber_handle(hdl, 0);
+    sockptyr_clobber_handle(hdl);
 }
 
 #if USE_INOTIFY
