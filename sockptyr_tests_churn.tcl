@@ -8,14 +8,16 @@
 # look for leaks and the like.
 #
 # Takes directions on the command line:
-#       keep # -- set number of "things" of each kind to keep
+#       keep # # -- set number of "things" of each kind to keep; is a range
+#           so there can be some pseudorandom variation
 #       run # -- Perform churn (creation & removal of stuff) through the
-#           specified number of cycles.
+#           specified number of halfcycles.
 #       hd -- show handle debugging output
 #       sleep # -- sleep for the specified number of seconds
 # when it runs out of parameters it cleans up and exits.
 
-set keep 0
+set keep_min 0
+set keep_max 0
 set nctr 0
 set octr 0
 set sokpfx eraseme_churnsok
@@ -52,8 +54,10 @@ foreach s [glob -nocomplain -types s ${sokpfx}*] {
 # $db([list lstn path $cyc]) - path of listen socket opened cycle $cyc
 # $db([list inot hdl $cyc]) - handle of inotify watch opened cycle $cyc
 #                             (on this cycle's listen socket)
-# $db([list conns hdl $cyc]) - handles of connections to & from cycle $cyc's
-#                              listening socket
+# $db([list conns hdl $cyc]) - Two connection handles for each connection
+#                              we make to $cyc's listen socket. In each
+#                              pair the first is the "client" and the second
+#                              is the "server".
 # $allconns - list of open connection handles
 set allconns [list]
 
@@ -95,6 +99,24 @@ proc accept_proc {cyc hdl es} {
     puts stderr "Accepted: $hdl (cyc=$cyc)"
 }
 
+set expected_closes_cnt 0
+proc expected_closes_proc {hdl} {
+    # A callback to register for onclose that removes entries from
+    # the expected_closes array when it's called
+    global expected_closes expected_closes_cnt
+    puts stderr [list EC [array get expected_closes]]
+    if {![info exists expected_closes($hdl)] ||
+        $expected_closes($hdl) < 1} {
+        puts stderr "expected_closes_proc: Unexpected ($hdl)"
+        exit 1
+    }
+    unset expected_closes($hdl)
+    incr expected_closes_cnt
+    sockptyr onclose $hdl
+    sockptyr close $hdl
+    acremove $hdl
+}
+
 # single "add" subcycle operation
 proc add {cyc} {
     global db sokpfx allconns USE_INOTIFY accepted
@@ -103,22 +125,23 @@ proc add {cyc} {
 
     # Open a PTY
     lassign [sockptyr open_pty] db([list pty hdl $cyc]) db([list pty path $cyc])
+    set hdl $db([list pty hdl $cyc])
     lappend allconns $db([list pty hdl $cyc])
-    sockptyr onclose $db([list pty hdl $cyc]) [list badcb pty $cyc i]
+    sockptyr onclose $db([list pty hdl $cyc]) [list badcb pty $cyc i $hdl]
     update
     sockptyr onclose $db([list pty hdl $cyc])
     update
-    sockptyr onclose $db([list pty hdl $cyc]) [list badcb pty $cyc ii]
+    sockptyr onclose $db([list pty hdl $cyc]) [list badcb pty $cyc ii $hdl]
     update
     sockptyr onclose $db([list pty hdl $cyc]) XXX
     update
-    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc iii]
+    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc iii $hdl]
     update
     sockptyr onerror $db([list pty hdl $cyc])
     update
-    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc iv]
+    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc iv $hdl]
     update
-    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc v]
+    sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc v $hdl]
     update
     puts stderr "Opened PTY $db([list pty path $cyc])"
     puts stderr "Allocated handle is $db([list pty hdl $cyc])"
@@ -135,24 +158,21 @@ proc add {cyc} {
     for {set i 0} {$i < 2} {incr i} {
         set conn [sockptyr connect $db([list lstn path $cyc])]
         for {set j 0} {$j <2} {incr j} {
-            puts stderr [list XXX i $i j $j conn $conn]
             lappend db([list conns hdl $cyc]) $conn
             lappend allconns $conn
-            sockptyr onclose $conn [list badcb conn $cyc $i $j i]
+            sockptyr onclose $conn [list badcb conn $cyc $i $j i $conn]
             update
             sockptyr onclose $conn
             update
-            sockptyr onclose $conn [list badcb conn $cyc $i $j ii]
+            sockptyr onclose $conn [list badcb conn $cyc $i $j ii $conn]
             update
-            sockptyr onclose $conn XXX
-            update
-            sockptyr onerror $conn [list badcb conn $cyc $i $j iii]
+            sockptyr onerror $conn [list badcb conn $cyc $i $j iii $conn]
             update
             sockptyr onerror $conn
             update
-            sockptyr onerror $conn [list badcb conn $cyc $i $j iv]
+            sockptyr onerror $conn [list badcb conn $cyc $i $j iv $conn]
             update
-            sockptyr onerror $conn [list badcb conn $cyc $i $j v]
+            sockptyr onerror $conn [list badcb conn $cyc $i $j v $conn]
             update
             if {$j} {
                 break
@@ -160,7 +180,7 @@ proc add {cyc} {
                 # get the other end of the connection
                 update
                 while {![llength $accepted]} {
-                    update
+                    vwait $accepted
                 }
                 update
                 foreach {acyc ahdl} $accepted {
@@ -173,6 +193,7 @@ proc add {cyc} {
                 if {[llength $accepted] > 2} {
                     error "More connections than expected!"
                 }
+                set accepted [list]
             }
         }
     }
@@ -221,6 +242,7 @@ proc add {cyc} {
 # single "del" subcycle operation
 proc del {cyc} {
     global db allconns USE_INOTIFY
+    global expected_closes expected_closes_cnt
 
     puts stderr "del($cyc)"
 
@@ -232,16 +254,28 @@ proc del {cyc} {
         puts stderr "Inotify watch on $db([list lstn path $cyc]) removed"
     }
 
-    # Close listening socket that was opened before; wait for the
-    # connections to it to close
+    # Close listening socket that was opened before.
     set lpath $db([list lstn path $cyc])
     sockptyr close $db([list lstn hdl $cyc])
     unset db([list lstn path $cyc])
     unset db([list lstn hdl $cyc])
-    while {[llength $db([list conns hdl $cyc])]} {
-        # XXX
-        update
-        # XXX
+
+    # Close connections made through that listening socket.  Close one
+    # end of each, chosen pseudorandomly, and wait for the other to
+    # be closed too.
+
+    foreach {conn1 conn2} $db([list conns hdl $cyc]) {
+        if {rand() < 0.5} {
+            lassign [list $conn2 $conn1] conn1 conn2
+        }
+        set expected_closes($conn1) 1
+        set expected_closes($conn2) 1
+        sockptyr onclose $conn1 [list expected_closes_proc $conn1]
+        sockptyr onclose $conn2 [list expected_closes_proc $conn2]
+        sockptyr close $conn1
+    }
+    while {[array size expected_closes]} {
+        vwait expected_closes_cnt
     }
     unset db([list conns hdl $cyc])
     puts stderr "Listening socket $lpath and its connections closed."
@@ -262,26 +296,32 @@ for {set i 0} {$i < [llength $argv]} {incr i} {
     set a [lindex $argv $i]
     if {$a eq "keep"} {
         incr i
-        set keep [lindex $argv $i]
-        if {![string is integer -strict $keep] || $keep < 0} {
-            error "'keep $keep' not a nonnegative integer"
+        set keep_min [lindex $argv $i]
+        incr i
+        set keep_max [lindex $argv $i]
+        if {![string is integer -strict $keep_min] || int($keep_min) < 0 ||
+            ![string is integer -strict $keep_max] ||
+            int($keep_min) < 0 || int($keep_max) < int($keep_min)} {
+            error "'keep $keep_min $keep_max' not an ordered nonnegative integer pair"
         }
-        set keep [expr {int($keep)}]
+        set keep_min [expr {int($keep_min)}]
+        set keep_max [expr {int($keep_max)}]
     } elseif {$a eq "run"} {
         incr i
         set run [lindex $argv $i]
         if {![string is integer -strict $run] || $run < 0} {
             error "'run $run' not a nonnegative integer"
         }
-        puts stderr "Running $run cycles now."
-        for {set j 0} {$j < $run} {incr j} {
-            if {$nctr <= $octr + $keep} {
+        puts stderr "Running $run halfcycles now."
+        while {$run > 0} {
+            if {$nctr <= $octr + $keep_max && rand() < 0.5} {
                 add $nctr
                 incr nctr
-            }
-            if {$nctr > $octr + $keep} {
+                incr run -1
+            } elseif {$nctr > $octr + $keep_min && rand() < 0.5} {
                 del $octr
                 incr octr
+                incr run -1
             }
         }
         puts stderr "Running $run cycles done."
