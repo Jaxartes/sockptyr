@@ -1379,6 +1379,7 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
                     (int)ie->wd);
             inotify_rm_watch(sd->inotify_fd, ie->wd);
             sd->inotify_fd = -1;
+            pos += sizeof(*ie) + ie->len;
             continue;
         }
         inot = &(hdl->u.u_inot);
