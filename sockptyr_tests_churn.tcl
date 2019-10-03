@@ -14,6 +14,8 @@
 #           specified number of halfcycles.
 #       hd -- show handle debugging output
 #       sleep # -- sleep for the specified number of seconds
+#       hdalways -- run handle debugging output frequently
+#           but only check for errors
 # when it runs out of parameters it cleans up and exits.
 
 set keep_min 0
@@ -21,6 +23,7 @@ set keep_max 0
 set nctr 0
 set octr 0
 set sokpfx eraseme_churnsok
+set hdalways 0
 
 # initialize
 foreach path {./sockptyr.so ./sockptyr.dylib ./sockptyr.dll} {
@@ -80,6 +83,15 @@ proc acremove {hdl} {
     set allconns $allconns2
 }
 
+proc hderrorcheck {} {
+    # hderrorcheck: run "sockptyr dbg_handles" and ignore the result
+    # except for error; throw any error as an exception
+    array set dbg_handles [sockptyr dbg_handles]
+    if {[info exists dbg_handles(err)]} {
+        error "sockptyr dbg_handles error: $dbg_handles(err)"
+    }
+}
+
 # event callbacks
 proc badcb {args} {
     # a callback to register when you expect it not to be called
@@ -119,7 +131,7 @@ proc expected_closes_proc {hdl} {
 
 # single "add" subcycle operation
 proc add {cyc} {
-    global db sokpfx allconns USE_INOTIFY accepted
+    global db sokpfx allconns USE_INOTIFY accepted hdalways
 
     puts stderr "add($cyc)"
 
@@ -145,6 +157,7 @@ proc add {cyc} {
     update
     puts stderr "Opened PTY $db([list pty path $cyc])"
     puts stderr "Allocated handle is $db([list pty hdl $cyc])"
+    if {$hdalways} { hderrorcheck }
 
     # Open a listening socket
     set db([list lstn path $cyc]) $sokpfx$cyc
@@ -152,6 +165,7 @@ proc add {cyc} {
         [sockptyr listen $db([list lstn path $cyc]) \
             [list accept_proc $cyc]]
     puts stderr "Opened listen socket $db([list lstn path $cyc])"
+    if {$hdalways} { hderrorcheck }
 
     # Connect (twice) to the listening socket
     set db([list conns hdl $cyc]) [list]
@@ -199,6 +213,7 @@ proc add {cyc} {
     }
     update
     puts stderr "Connected to listen socket $db([list lstn path $cyc]) twice"
+    if {$hdalways} { hderrorcheck }
 
     # Link, or relink, or delink, some of our extant connections
     set c1 [lindex $allconns [expr {int(rand()*[llength $allconns])}]]
@@ -219,6 +234,7 @@ proc add {cyc} {
     }
     update
     puts stderr "(done)"
+    if {$hdalways} { hderrorcheck }
 
     if {$USE_INOTIFY} {
         # Add an inotify watch, on our listen socket
@@ -228,6 +244,7 @@ proc add {cyc} {
                 XXX]
         update
         puts stderr "Added inotify watch on $db([list inot hdl $cyc])"
+        if {$hdalways} { hderrorcheck }
         
         # Make things happen to our inotify watch
         set t [file mtime $db([list lstn path $cyc])]
@@ -236,13 +253,14 @@ proc add {cyc} {
         update
         # XXX confirm it happened
         puts stderr "Triggered inotify watch"
+        if {$hdalways} { hderrorcheck }
     }
 }
 
 # single "del" subcycle operation
 proc del {cyc} {
     global db allconns USE_INOTIFY
-    global expected_closes expected_closes_cnt
+    global expected_closes expected_closes_cnt hdalways
 
     puts stderr "del($cyc)"
 
@@ -252,13 +270,17 @@ proc del {cyc} {
         unset db([list inot hdl $cyc])
         update
         puts stderr "Inotify watch on $db([list lstn path $cyc]) removed"
+        if {$hdalways} { hderrorcheck }
     }
 
     # Close listening socket that was opened before.
     set lpath $db([list lstn path $cyc])
     sockptyr close $db([list lstn hdl $cyc])
+    file delete $lpath
     unset db([list lstn path $cyc])
     unset db([list lstn hdl $cyc])
+    puts stderr "Listening socket $lpath removed"
+    if {$hdalways} { hderrorcheck }
 
     # Close connections made through that listening socket.  Close one
     # end of each, chosen pseudorandomly, and wait for the other to
@@ -278,7 +300,8 @@ proc del {cyc} {
         vwait expected_closes_cnt
     }
     unset db([list conns hdl $cyc])
-    puts stderr "Listening socket $lpath and its connections closed."
+    puts stderr "Listening socket $lpath's connections closed."
+    if {$hdalways} { hderrorcheck }
 
     # Close the PTY that was opened before
     set ppath $db([list pty path $cyc])
@@ -289,6 +312,7 @@ proc del {cyc} {
     unset db([list pty path $cyc])
     unset db([list pty hdl $cyc])
     puts stderr "Closed pty $ppath"
+    if {$hdalways} { hderrorcheck }
 }
 
 # process directions from the command line
@@ -312,7 +336,8 @@ for {set i 0} {$i < [llength $argv]} {incr i} {
         if {![string is integer -strict $run] || $run < 0} {
             error "'run $run' not a nonnegative integer"
         }
-        puts stderr "Running $run halfcycles now."
+        set runsave $run
+        puts stderr "Running $runsave halfcycles now."
         while {$run > 0} {
             if {$nctr <= $octr + $keep_max && rand() < 0.5} {
                 add $nctr
@@ -324,7 +349,7 @@ for {set i 0} {$i < [llength $argv]} {incr i} {
                 incr run -1
             }
         }
-        puts stderr "Running $run cycles done."
+        puts stderr "Running $runsave cycles done."
     } elseif {$a eq "hd"} {
         array set dbg_handles [sockptyr dbg_handles]
         puts stderr "Handle debug:"
@@ -338,6 +363,8 @@ for {set i 0} {$i < [llength $argv]} {incr i} {
             error "sockptyr dbg_handles error: $dbg_handles(err)"
         }
         puts stderr "Handle debug done."
+    } elseif {$a eq "hdalways"} {
+        set hdalways 1
     } elseif {$a eq "sleep"} {
         incr i
         set sleep [lindex $argv $i]

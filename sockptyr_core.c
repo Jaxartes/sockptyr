@@ -140,12 +140,12 @@ struct sockptyr_hdl {
     } u;
 
     /* 'next' & 'prev' put handles with particular 'usage' values into
-     * a one-and-a-half linked list.  So far used only used for:
+     * a doubly linked list.  So far used only used for:
      *      usage_inot: list head is inotify_hdls in struct sockptyr_data
      *      usage_empty: list head is empty_hdls in struct sockptyr_data
      */
     struct sockptyr_hdl *next;
-    struct sockptyr_hdl **prev;
+    struct sockptyr_hdl *prev;
 };
 
 struct sockptyr_data {
@@ -187,11 +187,11 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp);
 static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
                                      struct sockptyr_hdl *hdl, int num,
                                      char *err, int errsz);
-static void sockptyr_dbg_handles_15ll(Tcl_Interp *interp,
-                                      struct sockptyr_data *sd,
-                                      struct sockptyr_hdl **hdls,
-                                      enum usage usage, const char *lbl,
-                                      char *err, int errsz);
+static void sockptyr_dbg_handles_lst(Tcl_Interp *interp,
+                                     struct sockptyr_data *sd,
+                                     struct sockptyr_hdl **hdls,
+                                     enum usage usage, const char *lbl,
+                                     char *err, int errsz);
 static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[]);
 #if USE_INOTIFY
@@ -208,9 +208,10 @@ static void sockptyr_conn_handler(ClientData cd, int mask);
 static void sockptyr_lstn_handler(ClientData cd, int mask);
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
                                 char *errkw, char *errstr);
-static void sockptyr_15ll_insert(struct sockptyr_hdl **head,
-                                 struct sockptyr_hdl *hdl);
-static void sockptyr_15ll_remove(struct sockptyr_hdl *hdl);
+static void sockptyr_lst_insert(struct sockptyr_hdl **head,
+                                struct sockptyr_hdl *hdl);
+static void sockptyr_lst_remove(struct sockptyr_hdl **head,
+                                struct sockptyr_hdl *hdl);
 #if USE_INOTIFY
 static void sockptyr_inot_handler(ClientData cd, int mask);
 static Tcl_Obj *sockptyr_inot_flagrep(Tcl_Interp *interp, uint32_t flags);
@@ -635,17 +636,16 @@ static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd)
             hdl->sd = sd;
             hdl->num = i;
             hdl->usage = usage_empty;
-            sockptyr_15ll_insert(&(sd->empty_hdls), hdl);
+            sockptyr_lst_insert(&(sd->empty_hdls), hdl);
         }
     }
 
-    /* pick one of the empty handles in the 1.5-linked-list of them */
+    /* pick one of the empty handles in the doubly-linked-list of them */
     hdl = sd->empty_hdls;
-    sockptyr_15ll_remove(hdl);
+    sockptyr_lst_remove(&(sd->empty_hdls), hdl);
 
     /* prepare it */
-    hdl->next = NULL;
-    hdl->prev = NULL;
+    hdl->next = hdl->prev = NULL;
     hdl->usage = usage_dead;
 
     return(hdl);
@@ -693,8 +693,8 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl)
 
     switch (hdl->usage) {
     case usage_empty:
-        /* nothing more to do */
-        break;
+        /* nothing to do at all */
+        return;
     case usage_dead:
         /* nothing more to do */
         break;
@@ -721,7 +721,7 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl)
             struct sockptyr_inot *inot = &(hdl->u.u_inot);
             if (inot) {
                 inotify_rm_watch(hdl->sd->inotify_fd, inot->wd);
-                sockptyr_15ll_remove(hdl);
+                sockptyr_lst_remove(&(hdl->sd->inotify_hdls), hdl);
                 Tcl_DecrRefCount(inot->proc);
             }
         }
@@ -746,7 +746,7 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl)
     }
 
     hdl->usage = usage_empty;
-    sockptyr_15ll_insert(&(hdl->sd->empty_hdls), hdl);
+    sockptyr_lst_insert(&(hdl->sd->empty_hdls), hdl);
     memset(&(hdl->u), 0, sizeof(hdl->u));
 }
 
@@ -789,13 +789,13 @@ static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp)
         sockptyr_dbg_handles_one(interp, sd->hdls[i], i, err, sizeof(err));
     }
     
-    sockptyr_dbg_handles_15ll(interp, sd,
-                              &(sd->empty_hdls), usage_empty, "empty",
-                              err, sizeof(err));
+    sockptyr_dbg_handles_lst(interp, sd,
+                             &(sd->empty_hdls), usage_empty, "empty",
+                             err, sizeof(err));
 #if USE_INOTIFY
-    sockptyr_dbg_handles_15ll(interp, sd,
-                              &(sd->inotify_hdls), usage_inot, "inot",
-                              err, sizeof(err));
+    sockptyr_dbg_handles_lst(interp, sd,
+                             &(sd->inotify_hdls), usage_inot, "inot",
+                             err, sizeof(err));
 #endif
 
     if (err[0]) {
@@ -918,17 +918,17 @@ static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
     }
 }
 
-/* sockptyr_dbg_handles_one() -- Check one of the "1.5 linked lists"
+/* sockptyr_dbg_handles_one() -- Check one of the doubly linked lists
  * of handles of a particular usage type, as part of sockptyr_cmd_dbg_handles().
  */
-static void sockptyr_dbg_handles_15ll(Tcl_Interp *interp,
-                                      struct sockptyr_data *sd,
-                                      struct sockptyr_hdl **hdls,
-                                      enum usage usage, const char *lbl,
-                                      char *err, int errsz)
+static void sockptyr_dbg_handles_lst(Tcl_Interp *interp,
+                                     struct sockptyr_data *sd,
+                                     struct sockptyr_hdl **hdls,
+                                     enum usage usage, const char *lbl,
+                                     char *err, int errsz)
 {
     int lcnt, acnt, i;
-    struct sockptyr_hdl **thumb;
+    struct sockptyr_hdl *thumb;
 
     if (err[0]) {
         /* if there's already an error reported don't check any more */
@@ -938,20 +938,36 @@ static void sockptyr_dbg_handles_15ll(Tcl_Interp *interp,
     /* Go through the list checking that it contains handles that are
      * right and that it's linked properly.  Also count the handles.
      */
-    for (lcnt = 0, thumb = hdls; *thumb; thumb = &((*thumb)->next)) {
+    for (lcnt = 0, thumb = *hdls; thumb; thumb = thumb->next) {
         ++lcnt;
-        if (thumb != (*thumb)->prev) {
+        if (thumb->prev && thumb->prev->next != thumb) {
             snprintf(err, errsz,
-                     "handle %d has wrong 'prev' link exp %p got %p",
-                     (int)(*thumb)->num, thumb, (*thumb)->prev);
+                     "bad linkage: %d->prev = %d, %d->next = %d != %d",
+                     (int)thumb->num, (int)thumb->prev->num,
+                     (int)thumb->prev->num, (int)thumb->prev->next->num,
+                     (int)thumb->num);
             return;
         }
-        if ((*thumb)->usage != usage) {
+        if (thumb->prev == NULL && thumb != *hdls) {
+            snprintf(err, errsz,
+                     "bad linkage: %d->prev = null but %d is first in list",
+                     (int)thumb->num, (int)(*hdls)->num);
+            return;
+        }
+        if (thumb->next && thumb->next->prev != thumb) {
+            snprintf(err, errsz,
+                     "bad linkage: %d->next = %d, %d->prev = %d != %d",
+                     (int)thumb->num, (int)thumb->next->num,
+                     (int)thumb->next->num, (int)thumb->next->prev->num,
+                     (int)thumb->num);
+            return;
+        }
+        if (thumb->usage != usage) {
             snprintf(err, errsz,
                      "handle %d has wrong usage type exp %d got %d in"
                      " the %s list",
-                     (int)(*thumb)->num, (int)usage,
-                     (int)(*thumb)->usage, lbl);
+                     (int)thumb->num, (int)usage,
+                     (int)thumb->usage, lbl);
             return;
         }
     }
@@ -1091,7 +1107,7 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
     inot->wd = wd;
     inot->proc = Tcl_NewStringObj(argv[2], strlen(argv[2]));
     Tcl_IncrRefCount(inot->proc);
-    sockptyr_15ll_insert(&(sd->inotify_hdls), hdl);
+    sockptyr_lst_insert(&(sd->inotify_hdls), hdl);
 
     /* return a handle string identifying it */
     Tcl_SetObjResult(interp, Tcl_ObjPrintf("%s%d",
@@ -1564,28 +1580,30 @@ static Tcl_Obj *sockptyr_inot_flagrep(Tcl_Interp *interp, uint32_t flags)
 }
 #endif /* USE_INOTIFY */
 
-/* sockptyr_15ll_insert() -- Insert a handle into a "1.5-linked list". */
-static void sockptyr_15ll_insert(struct sockptyr_hdl **head,
-                                 struct sockptyr_hdl *hdl)
+/* sockptyr_lst_insert() -- Insert a handle into a doubly linked list. */
+static void sockptyr_lst_insert(struct sockptyr_hdl **head,
+                                struct sockptyr_hdl *hdl)
 {
-    /* insert into head position */
+    hdl->prev = NULL;
     hdl->next = *head;
-    if (*head) {
-        (*head)->prev = &(hdl->next);
+    if (hdl->next) {
+        hdl->next->prev = hdl;
     }
-    hdl->prev = head;
     *head = hdl;
 }
 
-/* sockptyr_15ll_remove() -- Remove a handle from a "1.5-linked list". */
-static void sockptyr_15ll_remove(struct sockptyr_hdl *hdl)
+/* sockptyr_lst_remove() -- Remove a handle from a doubly linked list". */
+static void sockptyr_lst_remove(struct sockptyr_hdl **head,
+                                struct sockptyr_hdl *hdl)
 {
-    /* remove from wherever it is */
-    if (hdl->next) {
+    if (hdl->next != NULL) {
         hdl->next->prev = hdl->prev;
     }
-    *(hdl->prev) = hdl->next;
-    hdl->next = NULL;
-    hdl->prev = NULL;
+    if (hdl->prev == NULL) {
+        *head = hdl->next;
+    } else {
+        hdl->prev->next = hdl->next;
+    }
+    hdl->next = hdl->prev = NULL;
 }
 
