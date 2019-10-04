@@ -134,12 +134,13 @@ set inotify_events [list]
 proc inotify_proc {tag mask cookie name} {
     # Callback for inotify.  Records its parameters in inotify_events.
     global inotify_events
+    puts stderr [list INOT $tag $mask $cookie $name]
     lappend inotify_events $tag $mask $cookie $name
 }
 
 # single "add" subcycle operation
 proc add {cyc} {
-    global db sokpfx allconns USE_INOTIFY accepted hdalways
+    global db sokpfx allconns USE_INOTIFY accepted hdalways inotify_events
 
     puts stderr "add($cyc)"
 
@@ -249,13 +250,13 @@ proc add {cyc} {
                 IN_ATTRIB \
                 [list inotify_proc $cyc]]
         update
-        puts stderr "Added inotify watch on $db([list inot hdl $cyc])"
+        puts stderr "Added inotify watch $db([list inot hdl $cyc]) on $db([list lstn path $cyc])"
         if {$hdalways} { hderrorcheck }
         
         # Make things happen to our inotify watch
         set t [file mtime $db([list lstn path $cyc])]
         incr t -3
-        file mtime $db([list lstn path $cyc])
+        file mtime $db([list lstn path $cyc]) $t
         while {![llength $inotify_events]} {
             vwait inotify_events
         }
@@ -269,6 +270,7 @@ proc add {cyc} {
         if {[lsearch $evmask IN_ATTRIB] < 0} {
             error "Wrong inotify event: IN_ATTRIB not in $inotify_events"
         }
+        set inotify_events [list]
         
         puts stderr "Triggered and checked inotify watch"
         if {$hdalways} { hderrorcheck }

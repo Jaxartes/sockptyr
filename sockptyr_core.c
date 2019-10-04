@@ -215,6 +215,8 @@ static void sockptyr_lst_remove(struct sockptyr_hdl **head,
 #if USE_INOTIFY
 static void sockptyr_inot_handler(ClientData cd, int mask);
 static Tcl_Obj *sockptyr_inot_flagrep(Tcl_Interp *interp, uint32_t flags);
+static void sockptyr_inotify_fatal_error(struct sockptyr_data *sd,
+                                         const char *fmt, ...);
 #endif /* USE_INOTIFY */
 
 /*
@@ -304,6 +306,7 @@ static void sockptyr_cleanup(ClientData cd)
     if (sd->inotify_fd >= 0) {
         Tcl_DeleteFileHandler(sd->inotify_fd);
         close(sd->inotify_fd);
+        sd->inotify_fd = -1;
     }
 #endif /* USE_INOTIFY */
     ckfree((void *)sd);
@@ -1351,11 +1354,10 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
             /* not really an error, just let it slide */
         } else {
             /* really an error, but not much we can do right here! */
-            fprintf(stderr, "sockptyr_inot_handler() read() error: %s\n",
-                    strerror(errno));
-            fprintf(stderr, "sockptyr inotify shutting down\n");
-            Tcl_DeleteFileHandler(sd->inotify_fd);
-            sd->inotify_fd = -1;
+            sockptyr_inotify_fatal_error(sd,
+                                         "sockptyr_inot_handler() read() error:"
+                                         " %s\n",
+                                         strerror(errno));
             return;
         }
     } else if (got == 0) {
@@ -1363,10 +1365,8 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
          * called if there was nothing to read.  Don't let that happen
          * frequently.
          */
-        fprintf(stderr, "sockptyr_inot_handler() read empty\n");
-        fprintf(stderr, "sockptyr inotify shutting down\n");
-        Tcl_DeleteFileHandler(sd->inotify_fd);
-        sd->inotify_fd = -1;
+        sockptyr_inotify_fatal_error(sd,
+                                     "sockptyr_inot_handler() read empty\n");
         return;
     }
 
@@ -1378,10 +1378,9 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
              * This shouldn't have happened:  I *think* the kernel shouldn't
              * do this.
              */
-            fprintf(stderr, "sockptyr_inot_handler() read incomplete\n");
-            fprintf(stderr, "sockptyr inotify shutting down\n");
-            Tcl_DeleteFileHandler(sd->inotify_fd);
-            sd->inotify_fd = -1;
+            sockptyr_inotify_fatal_error(sd,
+                                         "sockptyr_inot_handler() read"
+                                         " incomplete\n");
             return;
         }
 
@@ -1394,7 +1393,6 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
             fprintf(stderr, "sockptyr_inot_handler() unknown wd %d; ignoring\n",
                     (int)ie->wd);
             inotify_rm_watch(sd->inotify_fd, ie->wd);
-            sd->inotify_fd = -1;
             pos += sizeof(*ie) + ie->len;
             continue;
         }
@@ -1425,6 +1423,21 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
         /* move on to the next one, if any */
         pos += sizeof(*ie) + ie->len;
     }
+}
+
+/* sockptyr_inotify_fatal_error() -- something bad happened involving
+ * "inotify", so bad we have to shut down "inotify".
+ */
+static void sockptyr_inotify_fatal_error(struct sockptyr_data *sd,
+                                         const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "sockptyr inotify shutting down\n");
+    Tcl_DeleteFileHandler(sd->inotify_fd);
+    sd->inotify_fd = -1;
 }
 #endif /* USE_INOTIFY */
 
