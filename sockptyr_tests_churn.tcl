@@ -16,6 +16,7 @@
 #       sleep # -- sleep for the specified number of seconds
 #       hdalways -- run handle debugging output frequently
 #           but only check for errors
+#       cleanup -- clean up, as is done at the end of the run
 # when it runs out of parameters it cleans up and exits.
 
 set keep_min 0
@@ -129,6 +130,13 @@ proc expected_closes_proc {hdl} {
     acremove $hdl
 }
 
+set inotify_events [list]
+proc inotify_proc {tag mask cookie name} {
+    # Callback for inotify.  Records its parameters in inotify_events.
+    global inotify_events
+    lappend inotify_events $tag $mask $cookie $name
+}
+
 # single "add" subcycle operation
 proc add {cyc} {
     global db sokpfx allconns USE_INOTIFY accepted hdalways
@@ -144,8 +152,6 @@ proc add {cyc} {
     sockptyr onclose $db([list pty hdl $cyc])
     update
     sockptyr onclose $db([list pty hdl $cyc]) [list badcb pty $cyc ii $hdl]
-    update
-    sockptyr onclose $db([list pty hdl $cyc]) XXX
     update
     sockptyr onerror $db([list pty hdl $cyc]) [list badcb pty $cyc iii $hdl]
     update
@@ -241,7 +247,7 @@ proc add {cyc} {
         set db([list inot hdl $cyc]) \
             [sockptyr inotify $db([list lstn path $cyc]) \
                 IN_ATTRIB \
-                XXX]
+                [list inotify_proc $cyc]]
         update
         puts stderr "Added inotify watch on $db([list inot hdl $cyc])"
         if {$hdalways} { hderrorcheck }
@@ -250,9 +256,21 @@ proc add {cyc} {
         set t [file mtime $db([list lstn path $cyc])]
         incr t -3
         file mtime $db([list lstn path $cyc])
-        update
-        # XXX confirm it happened
-        puts stderr "Triggered inotify watch"
+        while {![llength $inotify_events]} {
+            vwait inotify_events
+        }
+        if {[llength $inotify_events] > 4} {
+            error "Too many inotify events: $inotify_events"
+        }
+        lassign $inotify_events evtag evmask evcookie evname
+        if {$evtag ne $cyc} {
+            error "Wrong inotify event: tag $evtag exp $cyc, in $inotify_events"
+        }
+        if {[lsearch $evmask IN_ATTRIB] < 0} {
+            error "Wrong inotify event: IN_ATTRIB not in $inotify_events"
+        }
+        
+        puts stderr "Triggered and checked inotify watch"
         if {$hdalways} { hderrorcheck }
     }
 }
@@ -304,11 +322,15 @@ proc del {cyc} {
     if {$hdalways} { hderrorcheck }
 
     # Close the PTY that was opened before
+    set ptyh $db([list pty hdl $cyc])
+    set expected_closes($ptyh) 1
+    sockptyr onclose $ptyh) [list expected_closes_proc $ptyh]
     set ppath $db([list pty path $cyc])
-    sockptyr close $db([list pty hdl $cyc])
-    acremove $db([list pty hdl $cyc])
+    sockptyr close $ptyh
     update
-    # XXX see that the close handler is called
+    while {[array size expected_closes]} {
+        vwait expected_closes_cnt
+    }
     unset db([list pty path $cyc])
     unset db([list pty hdl $cyc])
     puts stderr "Closed pty $ppath"
@@ -362,6 +384,23 @@ for {set i 0} {$i < [llength $argv]} {incr i} {
         if {[info exists dbg_handles(err)]} {
             error "sockptyr dbg_handles error: $dbg_handles(err)"
         }
+        array unset usages_cnt
+        array unset usages_max
+        foreach n [array names dbg_handles] {
+            if {[llength $n] == 2 && [lindex $n 1] eq "usage"} {
+                set hdl [lindex $n 0]
+                set usage $dbg_handles($n)
+                if {![info exists usages_cnt($usage)]} {
+                    set usages_cnt($usage) 0
+                    set usages_max($usage) 0
+                }
+                incr usages_cnt($usage)
+                set usages_max($usage) [expr {max($usages_max($usage), $hdl)}]
+            }
+        }
+        foreach usage [lsort [array names usages_cnt]] {
+            puts stderr "handles with usage $usage: count $usages_cnt($usage) max $usages_max($usage)"
+        }
         puts stderr "Handle debug done."
     } elseif {$a eq "hdalways"} {
         set hdalways 1
@@ -375,13 +414,19 @@ for {set i 0} {$i < [llength $argv]} {incr i} {
         puts stderr "Sleeping $sleep seconds:"
         after [expr {int(ceil(double($sleep) * 1000))}]
         puts stderr "Sleep done."
+    } elseif {$a eq "cleanup"} {
+        puts stderr "Doing commanded cleanup cycle if any applicable."
+        while {$octr < $nctr} {
+            del $octr
+            incr octr
+        }
     } else {
         error "Unknown direction '$a'"
     }
 }
 
 # final cleanup
-puts stderr "Doing final cleanup cycles."
+puts stderr "Doing final cleanup cycles if any."
 while {$octr < $nctr} {
     del $octr
     incr octr
