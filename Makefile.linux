@@ -4,7 +4,10 @@
 USE_INOTIFY=1
 DYL=.so
 DYLFLAGS=-shared
-CFLAGS=-fpic -g -Wall -DUSE_INOTIFY=$(USE_INOTIFY) -I/usr/include/tcl
+CFLAGS=-fpic -g -Wall
+CFLAGS+=-DUSE_INOTIFY=$(USE_INOTIFY)
+CFLAGS+=-DUSE_TCL_BACKGROUNDEXCEPTION=1
+CFLAGS+=-I/usr/include/tcl
 CFLAGS+= -D_XOPEN_SOURCE=700
 
 sockptyr$(DYL): sockptyr_core.o

@@ -4,7 +4,9 @@
 USE_INOTIFY=0
 DYL=.dylib
 DYLFLAGS=-dynamiclib -flat_namespace
-CFLAGS=-g -Wall -DUSE_INOTIFY=$(USE_INOTIFY)
+CFLAGS=-g -Wall
+CFLAGS+=-DUSE_INOTIFY=$(USE_INOTIFY)
+CFLAGS+=-DUSE_TCL_BACKGROUNDEXCEPTION=0
 
 sockptyr$(DYL): sockptyr_core.o
 	$(CC) $(DYLFLAGS) -o $@ $^ -lc -ltcl
