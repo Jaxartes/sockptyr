@@ -14,6 +14,14 @@
 /* Compile with -DUSE_INOTIFY=1 on Linux to take advantage of inotify(7). */
 #endif
 
+#ifndef USE_TCL_BACKGROUNDEXCEPTION
+#define USE_TCL_BACKGROUNDEXCEPTION 0
+/* Compute with -DUSE_TCL_BACKGROUNDEXCEPTION=1 to enable the use of
+ * Tcl_BackgroundException().  A function which I've seen in the documentation
+ * but been unable to actually call, so I suspect it's new or something.
+ */
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1322,7 +1330,10 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
     struct sockptyr_hdl *hdl;
     struct sockptyr_inot *inot;
     char buf[65536];
-    int got, pos, rv;
+    int got, pos;
+#if USE_TCL_BACKGROUNDEXCEPTION
+    int result;
+#endif
     Tcl_Obj *tclcom, *flags;
     Tcl_Interp *interp = sd->interp;
 
@@ -1396,8 +1407,11 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
                                  Tcl_NewStringObj(ie->name,
                                                   strnlen(ie->name, ie->len)));
         Tcl_Preserve(interp);
-        rv = Tcl_EvalObjEx(interp, tclcom, TCL_EVAL_GLOBAL);
-#if 0 /* is Tcl_BackgroundException() maybe new? */
+#if USE_TCL_BACKGROUNDEXCEPTION
+        result =
+#endif
+        Tcl_EvalObjEx(interp, tclcom, TCL_EVAL_GLOBAL);
+#if USE_TCL_BACKGROUNDEXCEPTION
         if (result != TCL_OK) {
             Tcl_BackgroundException(interp, result);
         }
@@ -1439,7 +1453,10 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
     struct sockptyr_data *sd = hdl->sd;
     Tcl_Interp *interp = sd->interp;
     struct sockptyr_lstn *lstn;
-    int rv, fd;
+    int fd;
+#if USE_TCL_BACKGROUNDEXCEPTION
+    int result;
+#endif
     struct sockaddr_un a;
     socklen_t l;
     Tcl_Obj *tclcom;
@@ -1460,10 +1477,16 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
             /* transient something or other, not an error; ignore */
             return;
         } else {
-            /* some kind of error */
+            /* Some kind of error.  Not handled very intelligently here.
+             * The best way would be to have a callback into the Tcl
+             * code to do something about it.  Right now, just emits a
+             * message and then delays a second (to reduce error
+             * spewing; it also makes it all to obvious to the user that
+             * something is wrong).
+             */
             fprintf(stderr, "accept(): on %d, failed: %s\n",
                     (int)lstn->sok, strerror(errno));
-            usleep(200000); /* lame way to prevent error spewing */
+            sleep(1);
             return;
         }
     }
@@ -1480,8 +1503,11 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
                                            handle_prefix, (int)chdl->num));
     Tcl_ListObjAppendElement(interp, tclcom, Tcl_NewObj());
     Tcl_Preserve(interp);
-    rv = Tcl_EvalObjEx(interp, tclcom, TCL_EVAL_GLOBAL);
-#if 0 /* is Tcl_BackgroundException() maybe new? */
+#if USE_TCL_BACKGROUNDEXCEPTION
+    result =
+#endif
+    Tcl_EvalObjEx(interp, tclcom, TCL_EVAL_GLOBAL);
+#if USE_TCL_BACKGROUNDEXCEPTION
         if (result != TCL_OK) {
             Tcl_BackgroundException(interp, result);
         }
@@ -1504,7 +1530,9 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
     struct sockptyr_data *sd = hdl->sd;
     Tcl_Interp *interp = sd->interp;
     Tcl_Obj *cmd;
+#if USE_TCL_BACKGROUNDEXCEPTION
     int result;
+#endif
 
     if (errkw == NULL) {
         if (conn->onclose == NULL) return; /* no handler */
@@ -1525,8 +1553,11 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
     }
 
     Tcl_Preserve(interp);
-    result = Tcl_EvalObjEx(interp, cmd, TCL_EVAL_GLOBAL);
-#if 0 /* is Tcl_BackgroundException() maybe new? */
+#if USE_TCL_BACKGROUNDEXCEPTION
+    result =
+#endif
+    Tcl_EvalObjEx(interp, cmd, TCL_EVAL_GLOBAL);
+#if USE_TCL_BACKGROUNDEXCEPTION
     if (result != TCL_OK) {
         Tcl_BackgroundException(interp, result);
     }
