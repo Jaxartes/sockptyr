@@ -1,0 +1,126 @@
+Guide to the Tcl API implemented in sockptyr_core.c.
+
+Concepts:
+
+Many functions in this API take or return a "handle".  This is a string
+that uniquely identifies something (such as a socket).  The handle's
+format has no particular meaning, and is only good as long as the thing
+it refers to exists.  The software might be reused after that.
+
+So, keep the handles that it gives you, and use them to refer to the things
+they refer to, and don't try to parse or construct them.
+
+Basic usage:
+    1. Load the library into Tcl with something like the following:
+        load sockptyr.dylib sockptyr
+    2. Use the various commands it provides, described below.  All
+    begin with "sockptyr"; example: "sockptyr link".
+
+Commands:
+    sockptyr close $hdl
+        Get rid of the thing identified by handle $hdl, which might be
+        a connection handle or any of the other handle types returned
+        by the various "sockptyr" commands.  Once the handle has been
+        closed you should forget it and not use it; it might be reused
+        by "sockptyr" for something else.
+
+    sockptyr connect $path
+        Connects to a UNIX domain stream socket (with filename $path).
+        Returns a handle for the connection.  This handle can be passed
+        to sockptyr link, etc.
+
+    sockptyr info
+        Returns information about the "sockptyr" software.  The result
+        is name value pairs in a list of the form "name value name value ...".
+
+        Names defined:
+            USE_INOTIFY
+                1 if sockptyr was compiled to use "inotify", a Linux
+                    kernel feature, in which case the command
+                    "sockptyr inotify" exists.
+                0 if not
+
+    sockptyr inotify $path $mask $proc
+        Interface to Linux's "inotify" functionality; see inotify(7).
+        Not available on other systems.  This interface to "inotify" is
+        not as flexible or scalable as it could be, but is sufficient
+        to "sockptyr"'s intended application.
+
+        $path is a pathname (filename) to monitor.
+
+        $mask is a list of flags to pass to inotify_add_watch().  Mostly
+        they're events to watch for; there are a few other flags too.
+        Example: {IN_ACCESS IN_ATTRIB}
+
+        $proc is a Tcl script to run for each event the kernel notifies
+        us of, with the following list items appended:
+            list of event flags like IN_ACCESS
+            cookie associating related events
+            name field if any, or empty string
+        In common usage, $proc will be a Tcl procedure name followed by
+        some of its parameters.
+
+    sockptyr link $hdl1 ?$hdl2?
+        Links two connections together identified by $hdl1 and $hdl2.
+        These have to be connection handles (provided by "sockptyr" commands
+        whose entries in this document say they provide connection handles).
+
+        If $hdl1 or $hdl2 was linked to any other connection previously,
+        they'll be unlinked first.  Leave $hdl2 out to just unlink $hdl1.
+
+        When two connections are linked to each other, anything received
+        on one is sent out the other and vice versa.  When a connection
+        is not linked to any other, the data received on it is ignored.
+        Connections start out unlinked.
+
+    sockptyr listen $path $proc
+        Creates a UNIX domain stream socket (with filename $path) and
+        returns a handle referring to it.  $path should *not* already exist,
+        and is *not* removed when you close the handle.  Use Tcl's filesystem
+        operations ("file" etc) to remove it as desired.
+
+        When a connection is received on $path, the Tcl script $proc will
+        be executed, after appending two list items to it as follows:
+            a handle for the new connection
+            empty string (reserved for future use)
+        In common usage, $proc will be a Tcl proc name and some of its
+        parameters.
+
+        The handle returned by "sockptyr listen" is not a connection handle
+        and cannot be passed to "sockptyr link" etc.  The handle passed to
+        $proc, on the other hand, *is* a connection handle.
+        
+    sockptyr onclose $hdl ?$proc?
+        When the connection identified by handle $hdl is closed, run
+        the Tcl script $proc.  If a handler had previously been registered
+        this will delete it.  Leave out $proc to cancel a previously
+        defined handler.
+
+    sockptyr onerror $hdl ?$proc?
+        When an error occurs on the connection identified by handle $hdl,
+        run the Tcl script $proc.  If a handler had previously been registered
+        this will delete it.  Leave out $proc to cancel a previously
+        defined handler.
+
+        The onerror handler is executed with two list items appended to
+        it as follows:
+            keyword loosely identifying the kind of error
+            printable message like from strerror()
+        In common usage $proc will be a Tcl procedure name and some of its
+        parameters.
+
+        Keywords:
+            bug -- errors that really shouldn't happen and may indicate
+                a bug somewhere in the code
+            io -- an I/O request made to the kernel resulted in an error.
+                Note that this is not the same as "I/O Error" (EIO)
+
+    sockptyr open_pty
+        Allocates a PTY (pseudo-terminal).  Returns two things (in a list):
+            handle referring to the PTY
+            the pathname to the PTY
+        The handle it returns is a "connection" handle and can be passed
+        to sockptyr link, etc.
+
+Intentionally undocumented commands, don't use:
+    sockptyr dbg_handles
