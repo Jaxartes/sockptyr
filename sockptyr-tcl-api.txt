@@ -96,6 +96,9 @@ Commands:
         this will delete it.  Leave out $proc to cancel a previously
         defined handler.
 
+        Not called when you do "sockptyr close" on the handle, it's only
+        for closes your Tcl code wouldn't have known about.
+
     sockptyr onerror $hdl ?$proc?
         When an error occurs on the connection identified by handle $hdl,
         run the Tcl script $proc.  If a handler had previously been registered

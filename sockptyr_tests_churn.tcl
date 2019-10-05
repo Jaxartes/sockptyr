@@ -125,7 +125,6 @@ proc expected_closes_proc {hdl} {
     }
     unset expected_closes($hdl)
     incr expected_closes_cnt
-    sockptyr onclose $hdl
     sockptyr close $hdl
     acremove $hdl
 }
@@ -310,11 +309,11 @@ proc del {cyc} {
         if {rand() < 0.5} {
             lassign [list $conn2 $conn1] conn1 conn2
         }
-        set expected_closes($conn1) 1
         set expected_closes($conn2) 1
-        sockptyr onclose $conn1 [list expected_closes_proc $conn1]
+        sockptyr onclose $conn1 [list expected_closes_proc $conn1] ; #not called
         sockptyr onclose $conn2 [list expected_closes_proc $conn2]
         sockptyr close $conn1
+        acremove $conn1
     }
     while {[array size expected_closes]} {
         vwait expected_closes_cnt
@@ -325,14 +324,10 @@ proc del {cyc} {
 
     # Close the PTY that was opened before
     set ptyh $db([list pty hdl $cyc])
-    set expected_closes($ptyh) 1
-    sockptyr onclose $ptyh) [list expected_closes_proc $ptyh]
+    sockptyr onclose $ptyh) [list expected_closes_proc $ptyh] ; # not called
     set ppath $db([list pty path $cyc])
     sockptyr close $ptyh
-    update
-    while {[array size expected_closes]} {
-        vwait expected_closes_cnt
-    }
+    acremove $ptyh
     unset db([list pty path $cyc])
     unset db([list pty hdl $cyc])
     puts stderr "Closed pty $ppath"

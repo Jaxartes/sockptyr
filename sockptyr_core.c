@@ -12,7 +12,6 @@
 #ifndef USE_INOTIFY
 #define USE_INOTIFY 0
 /* Compile with -DUSE_INOTIFY=1 on Linux to take advantage of inotify(7). */
-/* XXX inotify code not much tested yet */
 #endif
 
 #include <stdio.h>
@@ -200,9 +199,8 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
 #endif /* USE_INOTIFY */
 static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
                               int argc, const char *argv[]);
-static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl);
+static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int dofree);
 static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
-static void sockptyr_close_conn(struct sockptyr_hdl *hdl);
 static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
 static void sockptyr_conn_handler(ClientData cd, int mask);
 static void sockptyr_lstn_handler(ClientData cd, int mask);
@@ -294,7 +292,7 @@ static void sockptyr_cleanup(ClientData cd)
     int i;
 
     for (i = 0; i < sd->ahdls; ++i) {
-        sockptyr_clobber_handle(sd->hdls[i]);
+        sockptyr_clobber_handle(sd->hdls[i], 1);
         ckfree((void *)sd->hdls[i]);
     }
     if (sd->hdls) {
@@ -686,20 +684,21 @@ static struct sockptyr_hdl *sockptyr_lookup_handle(struct sockptyr_data *sd,
 }
 
 /* sockptyr_clobber_handle() -- Clean up handle 'hdl'.
- * This could, sometimes, free the sockptyr_hdl,
- * but doesn't; simpler to leave it around unused until/unless we want
- * it again.
+ * The handle continues to exist but is moved to usage_dead or usage_empty
+ * (depending on parameter 'dofree') and has any stuff specific to its
+ * current usage value destroyed.
  */
-static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl)
+static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int dofree)
 {
     if (!hdl) return; /* nothing to do */
 
+    /* get rid of any data particular to the hdl->usage value */
     switch (hdl->usage) {
     case usage_empty:
-        /* nothing to do at all */
-        return;
+        /* no usage-specific data */
+        break;
     case usage_dead:
-        /* nothing more to do */
+        /* no usage-specific data */
         break;
     case usage_conn:
         {
@@ -748,9 +747,15 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl)
         break;
     }
 
-    hdl->usage = usage_empty;
-    sockptyr_lst_insert(&(hdl->sd->empty_hdls), hdl);
-    memset(&(hdl->u), 0, sizeof(hdl->u));
+    if (dofree) {
+        if (hdl->usage != usage_empty) {
+            hdl->usage = usage_empty;
+            sockptyr_lst_insert(&(hdl->sd->empty_hdls), hdl);
+            memset(&(hdl->u), 0, sizeof(hdl->u));
+        }
+    } else if (hdl->usage != usage_empty) {
+        hdl->usage = usage_dead;
+    }
 }
 
 /* sockptyr_init_conn(): Initialize a sockptyr handle structure for
@@ -1145,28 +1150,7 @@ static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
         return(TCL_ERROR);
     }
 
-    switch (hdl->usage) {
-    case usage_empty:
-        /* nothing to do */
-        break;
-    case usage_dead:
-        sockptyr_clobber_handle(hdl);
-        break;
-    case usage_conn:
-        sockptyr_close_conn(hdl);
-        break;
-#if USE_INOTIFY
-    case usage_inot:
-        sockptyr_clobber_handle(hdl);
-        break;
-#endif /* USE_INOTIFY */
-    case usage_exec:
-        sockptyr_clobber_handle(hdl);
-        break;
-    case usage_lstn:
-        sockptyr_clobber_handle(hdl);
-        break;
-    }
+    sockptyr_clobber_handle(hdl, 1);
 
     return(TCL_OK);
 }
@@ -1257,7 +1241,8 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             }
         } else if (rv == 0) {
             /* connection closed */
-            sockptyr_close_conn(hdl);
+            sockptyr_conn_event(hdl, NULL, NULL);
+            sockptyr_clobber_handle(hdl, 0);
             return;
         } else {
             /* got something, record it in the buffer */
@@ -1478,7 +1463,7 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
             /* some kind of error */
             fprintf(stderr, "accept(): on %d, failed: %s\n",
                     (int)lstn->sok, strerror(errno));
-            sockptyr_clobber_handle(hdl);
+            usleep(200000); /* lame way to prevent error spewing */
             return;
         }
     }
@@ -1548,15 +1533,6 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
 #endif
     Tcl_Release(interp);
     Tcl_DecrRefCount(cmd);
-}
-
-/* sockptyr_close_conn(): Close a conection, given by handle.  The handle
- * must really be a connection or this will be bad.
- */
-static void sockptyr_close_conn(struct sockptyr_hdl *hdl)
-{
-    sockptyr_conn_event(hdl, NULL, NULL);
-    sockptyr_clobber_handle(hdl);
 }
 
 #if USE_INOTIFY
