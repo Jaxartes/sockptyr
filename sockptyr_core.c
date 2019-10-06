@@ -730,6 +730,10 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int dofree)
         {
             struct sockptyr_inot *inot = &(hdl->u.u_inot);
             if (inot) {
+#if 0
+                fprintf(stderr, "removing inotify: num %d wd %d\n",
+                        (int)hdl->num, (int)inot->wd);
+#endif
                 inotify_rm_watch(hdl->sd->inotify_fd, inot->wd);
                 sockptyr_lst_remove(&(hdl->sd->inotify_hdls), hdl);
                 Tcl_DecrRefCount(inot->proc);
@@ -1124,6 +1128,10 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
     inot->proc = Tcl_NewStringObj(argv[2], strlen(argv[2]));
     Tcl_IncrRefCount(inot->proc);
     sockptyr_lst_insert(&(sd->inotify_hdls), hdl);
+#if 0
+    fprintf(stderr, "added inotify: num %d wd %d\n",
+            (int)hdl->num, (int)inot->wd);
+#endif
 
     /* return a handle string identifying it */
     Tcl_SetObjResult(interp, Tcl_ObjPrintf("%s%d",
@@ -1381,14 +1389,25 @@ static void sockptyr_inot_handler(ClientData cd, int mask)
         }
 
         /* Find our own watch information about ie->wd */
+#if 0
+        fprintf(stderr, "received inotify: wd %d\n", (int)ie->wd);
+#endif
         for (hdl = sd->inotify_hdls; hdl; hdl = hdl->next) {
             if (ie->wd == hdl->u.u_inot.wd)
                 break;
         }
         if (!hdl) {
-            fprintf(stderr, "sockptyr_inot_handler() unknown wd %d; ignoring\n",
-                    (int)ie->wd);
-            inotify_rm_watch(sd->inotify_fd, ie->wd);
+            if (ie->mask & IN_IGNORED) {
+                /* It's normal to get this when a watch is removed; silently
+                 * ignore it.
+                 */
+            } else {
+                /* shouldn't happen */
+                fprintf(stderr,
+                        "sockptyr_inot_handler() unknown wd %d; ignoring\n",
+                        (int)ie->wd);
+                inotify_rm_watch(sd->inotify_fd, ie->wd);
+            }
             pos += sizeof(*ie) + ie->len;
             continue;
         }
