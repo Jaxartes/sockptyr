@@ -51,6 +51,9 @@ for {set i 0} {$i < 10} {incr i} {
     lappend pty_handles $hdl
     lappend pty_paths $path
     puts stderr "\tPTY $i/10: handle $hdl path $path"
+    if {$i == 5} {
+        sockptyr buffer_size 1024
+    }
 }
 puts stderr "Done"
 
