@@ -17,6 +17,12 @@ Basic usage:
     begin with "sockptyr"; example: "sockptyr link".
 
 Commands:
+    sockptyr buffer_size $bytes
+        Set the buffer size for connections to $bytes bytes.
+        Defaults to 4096.  Has no effect on connection handles that
+        have already been allocated.  Each connection's buffer is used
+        for its *received* data.
+
     sockptyr close $hdl
         Get rid of the thing identified by handle $hdl, which might be
         a connection handle or any of the other handle types returned

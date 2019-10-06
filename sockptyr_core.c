@@ -38,6 +38,7 @@
 #include <sys/un.h>
 
 static const char *handle_prefix = "sockptyr_";
+static const int buf_sz = 4096;
 
 #if USE_INOTIFY
 static struct {
@@ -162,6 +163,7 @@ struct sockptyr_data {
     struct sockptyr_hdl *empty_hdls; /* handles with usage_empty */
     struct sockptyr_hdl **hdls; /* handles that have been created */
     int ahdls; /* count of entries in hdls[] */
+    int buf_sz; /* value for new connections' buf_sz */
 #if USE_INOTIFY
     int inotify_fd; /* file descriptor for inotify(7) */
     struct sockptyr_hdl *inotify_hdls; /* handles with usage_inot */
@@ -190,6 +192,8 @@ static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
                                         Tcl_Interp *interp,
                                         int argc, const char *argv[],
                                         char *what, int isonerror);
+static int sockptyr_cmd_buffer_size(ClientData cd, Tcl_Interp *interp,
+                                    int argc, const char *argv[]);
 static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp);
 static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
                                      struct sockptyr_hdl *hdl, int num,
@@ -243,6 +247,7 @@ int Sockptyr_Init(Tcl_Interp *interp)
     sd->ahdls = 0;
     sd->empty_hdls = NULL;
     sd->interp = interp;
+    sd->buf_sz = buf_sz;
 #if USE_INOTIFY
     sd->inotify_fd = -1;
     sd->inotify_hdls = NULL;
@@ -275,14 +280,16 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
         return(sockptyr_cmd_onclose(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "onerror")) {
         return(sockptyr_cmd_onerror(cd, interp, argc - 2, argv + 2));
+    } else if (!strcmp(argv[1], "close")) {
+        return(sockptyr_cmd_close(cd, interp, argc - 2, argv + 2));
+    } else if (!strcmp(argv[1], "buffer_size")) {
+        return(sockptyr_cmd_buffer_size(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "info")) {
         return(sockptyr_cmd_info(cd, interp, argc - 2, argv + 2));
 #if USE_INOTIFY
     } else if (!strcmp(argv[1], "inotify")) {
         return(sockptyr_cmd_inotify(cd, interp, argc - 2, argv + 2));
 #endif /* USE_INOTIFY */
-    } else if (!strcmp(argv[1], "close")) {
-        return(sockptyr_cmd_close(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "dbg_handles")) {
         return(sockptyr_cmd_dbg_handles(cd, interp));
     } else {
@@ -783,7 +790,7 @@ static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code)
     conn = &(hdl->u.u_conn);
     memset(conn, 0, sizeof(*conn));
     conn->fd = fd;
-    conn->buf_sz = 4096;
+    conn->buf_sz = hdl->sd->buf_sz;
     conn->buf = (void *)ckalloc(conn->buf_sz);
     conn->buf_empty = 1;
     conn->buf_in = conn->buf_out = 0;
@@ -1168,6 +1175,29 @@ static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
 
     sockptyr_clobber_handle(hdl, 1);
 
+    return(TCL_OK);
+}
+
+/* Tcl command "sockptyr buffer_size" -- Set buffer size for future
+ * connection handles, in bytes.
+ */
+static int sockptyr_cmd_buffer_size(ClientData cd, Tcl_Interp *interp,
+                                    int argc, const char *argv[])
+{
+    struct sockptyr_data *sd = cd;
+    int bytes;
+
+    if (argc != 1) {
+        Tcl_SetResult(interp, "usage: sockptyr buffer_size $bytes", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    bytes = atoi(argv[0]);
+    if (bytes <= 0) {
+        Tcl_SetResult(interp, "buffer size must be positive", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+    sd->buf_sz = bytes;
     return(TCL_OK);
 }
 
