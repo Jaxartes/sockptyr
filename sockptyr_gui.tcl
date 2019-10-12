@@ -257,8 +257,35 @@ proc read_and_connect_dir {path label} {
 #   $cookie -- the API provides this to match related events together
 #   $name -- name of file if any
 proc read_and_connect_inotify {path label flags cookie name} {
-    # XXX
-    puts stderr [list XXX read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name]
+    puts stderr [list read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name] ; # grot
+
+    if {[lsearch -glob -nocase $flags *IGNORE] >= 0} {
+        puts stderr "$path is gone and will no longer be monitored."
+        # It's gone!  We won't get more events.  We could get rid of
+        # this watch, but don't bother.
+    }
+    if {[lsearch -glob -nocase $flags *CREATE] >= 0} {
+        set fullpath [file join $path $name]
+        if {$name eq ""} {
+            # huh?
+            continue
+        }
+        if {[string match ".*" $name]} {
+            # hidden file, skip
+            continue
+        }
+        if {[catch {file type $fullpath} t] || $t ne "socket"} {
+            # not a socket, skip
+            continue
+        }
+
+        # here's a socket
+        if {[catch {sockptyr connect $fullpath} hdl]} {
+            conn_add $label 0 directory $hdl $name
+        } else {
+            conn_add $label 1 directory $hdl $name
+        }
+    }
 }
 
 # periodic: Execute $cmd every $ms milliseconds (or perhaps a bit longer).
