@@ -196,7 +196,10 @@ array set sockptyr_info [sockptyr info]
 #       1 listen $hdl "" -- $hdl is sockptyr connection handle
 #       0 connect $err -- $err is an error message
 #       1 connect $hdl -- $hdl is sockptyr connection handle
-#       XXX add more from read_and_connect_*
+#       0 directory $err $name -- $err is error message; $name
+#           filename within directory
+#       1 directory $hdl $name -- $hdl is sockptyr connection handle; $name
+#           filename within directory
 proc conn_add {label ok source args} {
     puts stderr [list XXX conn_add label $label ok $ok source $source args $args]
     # XXX write this fn
@@ -207,9 +210,42 @@ proc conn_add {label ok source args} {
 # Parameters:
 #   $path -- pathname to the directory
 #   $label -- source label from $config(...)
+# Uses global $_racd_seen(...) to keep track of sockets it saw the last
+# time through.  $_racd_seen($label) is a list, containing two entries
+# for each socket seen last time on processing $label: the filename
+# and... something else, doesn't matter.
 proc read_and_connect_dir {path label} {
-    puts stderr [list XXX read_and_connect_dir path $path label $label]
-    # XXX write this fn
+    global _racd_seen
+
+    puts stderr [list read_and_connect_dir path $path label $label] ; # grot
+
+    if {![info exists _racd_seen($label)]} {
+        set _racd_seen($label) [list]
+    }
+    array set osockets $_racd_seen($label)
+
+    foreach name [glob -directory $path -nocomplain -tails "*"] {
+        set fullpath [file join $path $name]
+        if {[string match ".*" $name]} {
+            # skip hidden files
+            continue
+        }
+        if {[file type $fullpath] ne "socket"} {
+            # skip anything that's not a socket
+            continue
+        }
+        set nsockets($name) 1
+        if {![info exists osockets($name)]} {
+            if {[catch {sockptyr connect $fullpath} hdl]} {
+                conn_add $label 0 directory $hdl $name
+            } else {
+                conn_add $label 1 directory $hdl $name
+            }
+        }
+    }
+
+    # and record what we saw, for comparison later
+    set _racd_seen($label) [array get nsockets]
 }
 
 # read_and_connect_inotify: Run when "inotify" notifies us of a directory
@@ -224,10 +260,6 @@ proc read_and_connect_inotify {path label flags cookie name} {
     # XXX
     puts stderr [list XXX read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name]
 }
-
-# read_and_connect_one: Have found a new socket via either
-# read_and_connect_dir or read_and_connect_inotify; connect to it.
-# XXX define and write
 
 # periodic: Execute $cmd every $ms milliseconds (or perhaps a bit longer).
 proc periodic {ms cmd} {
@@ -269,6 +301,9 @@ foreach label [lsort $labels] {
     switch -- $source {
         "listen" {
             lassign $config($label:source) source path
+            if {[file exists $path] && [file type $path] eq "socket"} {
+                catch {file delete -- $path}
+            }
             sockptyr listen $path [list conn_add $label 1 listen]
         }
         "connect" {
