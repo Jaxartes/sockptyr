@@ -16,7 +16,7 @@
 
 # $sockptyr_library_path: File pathname to load the sockptyr library
 # (compiled from sockptyr_core.c).
-set sockptyr_library_path ./sockptyr.so
+set sockptyr_library_path ./sockptyr[info sharedlibextension]
 
 # $config(...): Configuration of what we monitor and what we do with it.
 # An array with various keys and values as follows:
@@ -54,12 +54,17 @@ set sockptyr_library_path ./sockptyr.so
 #           When the button is activated, link the connection to itself
 #           (loopback).
 
-set config(LISTY:source) {listen ./listysok}
+set config(LISTY:source) {listen ./sockptyr_test_env_l}
 set config(LISTY:button:Terminal:icon) ico_term
 set config(LISTY:button:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
 set config(LISTY:button:Loopback:icon) ico_back
 set config(LISTY:button:Loopback:loopback) 1
-set config(DIR:source) {directory ./sokdir 20.0}
+set config(CONN:source) {connect ./sockptyr_test_env_c}
+set config(CONN:button:Terminal:icon) ico_term
+set config(CONN:button:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
+set config(CONN:button:Loopback:icon) ico_back
+set config(CONN:button:Loopback:loopback) 1
+set config(DIR:source) {directory ./sockptyr_test_env_d 20.0}
 set config(DIR:button:Terminal:icon) ico_term
 set config(DIR:button:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
 set config(DIR:button:Loopback:icon) ico_back
@@ -99,6 +104,12 @@ foreach {ilbl _ iset} {
 # lblfont - font for GUI labels
 font create lblfont -family Times -size 18 -weight bold
 
+# txtfont - font for general text
+font create txtfont -family Times -size 12 -weight normal
+
+# listwidth - list of scrolling connections list
+set listwidth 160
+
 ## ## ## GUI
 
 wm iconname . "sockptyr"
@@ -110,26 +121,51 @@ wm resizable . 0 0
 #       right side: info about selected connection; and some global options
 
 frame .conns
-canvas .conns.can -width 160 -height 448 -yscrollcommand {.conns.sb set} \
-    -scrollregion {0 0 160 1080}
+canvas .conns.can -width $listwidth \
+    -height 448 -yscrollcommand {.conns.sb set} \
+    -scrollregion [list 0 0 $listwidth 0]
 scrollbar .conns.sb -command {.conns.can yview}
 pack .conns.can -side left
 pack .conns.sb -side right -fill y
 pack .conns -side left
-.conns.can create rect 10 10 30 30 -fill red
-.conns.can create rect 130 10 150 30 -fill green
-.conns.can create rect 10 1050 30 1070 -fill blue
-.conns.can create rect 130 1050 150 1070 -fill purple
 
-frame .detail
+frame .detail -width 448
 label .detail.l1 -text "sockptyr: details" -font lblfont -justify left
 frame .detail.bbb
 button .detail.bbb.x -text "Exit" -command {exit 0}
+frame .detail.m
+frame .detail.m.none
+label .detail.m.none.l1 -text "No selection" -font lblfont -justify left
+label .detail.m.none.l2 -text "" -font txtfont -justify left
+label .detail.m.none.l3 -text "" -font txtfont -justify left
+frame .detail.m.conn
+
+proc detail_select {which} {
+    foreach which2 {none conn} {
+        pack forget .detail.m.$which2
+        if {$which eq $which2} {
+            pack .detail.m.$which -fill both
+        }
+    }
+}
+detail_select none
 
 pack .detail.l1 -side top -fill x
 pack .detail.bbb.x -side left
 pack .detail.bbb -side bottom -fill x
+pack .detail.m.none.l1 -side top -fill x
+pack .detail.m.none.l2 -side top -fill x
+pack .detail.m.none.l3 -side top -fill x
+pack .detail.m -fill both -expand 1
 pack .detail -side right -fill both
+
+proc badconfig {msg} {
+    puts stderr "Bad hard coded configuration: $msg"
+    .detail.m.none.l2 configure -text "Bad hard coded configuration"
+    .detail.m.none.l3 configure -text $msg
+    detail_select none
+    vwait forever
+}
 
 # XXX when building conn labels make sure they don't contain odd characters
 
@@ -140,12 +176,131 @@ pack .detail -side right -fill both
 # having nothing come up.
 update
 if {[catch {load $sockptyr_library_path sockptyr} res]} {
-    # XXX make this show up in the GUI
     puts stderr "Failed to load sockptyr library from $sockptyr_library_path: $res"
+    .detail.m.none.l2 configure -text "sockptyr library not loaded"
+    detail_select none
     vwait forever
+}
+
+set sockptyr_info(USE_INOTIFY) 0 ; # will be overwritten from [sockptyr info]
+array set sockptyr_info [sockptyr info]
+
+## ## ## Connection handling
+
+# conn_add: Called when there's a new connection to add to the list.
+# Parameters:
+#   $label -- source label from $config(...)
+#   $ok -- boolean: is the connection ok (1) or did it fail somehow (0)
+#   $source -- name of the connection source
+#   $args -- additional information, depending on $ok and $source:
+#       1 listen $hdl "" -- $hdl is sockptyr connection handle
+#       0 connect $err -- $err is an error message
+#       1 connect $hdl -- $hdl is sockptyr connection handle
+#       XXX add more from read_and_connect_*
+proc conn_add {label ok source args} {
+    puts stderr [list XXX conn_add label $label ok $ok source $source args $args]
+    # XXX write this fn
+}
+
+# read_and_connect_dir: Read a directory and connect to any sockets in
+# it that weren't seen in previous reads.
+# Parameters:
+#   $path -- pathname to the directory
+#   $label -- source label from $config(...)
+proc read_and_connect_dir {path label} {
+    puts stderr [list XXX read_and_connect_dir path $path label $label]
+    # XXX write this fn
+}
+
+# read_and_connect_inotify: Run when "inotify" notifies us of a directory
+# entry being added; see if it's a socket and if so connect to it.
+# Parameters:
+#   $path -- pathname to the directory
+#   $label -- source label from $config(...)
+#   $flags -- list of flags such as IN_CREATE
+#   $cookie -- the API provides this to match related events together
+#   $name -- name of file if any
+proc read_and_connect_inotify {path label flags cookie name} {
+    # XXX
+    puts stderr [list XXX read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name]
+}
+
+# read_and_connect_one: Have found a new socket via either
+# read_and_connect_dir or read_and_connect_inotify; connect to it.
+# XXX define and write
+
+# periodic: Execute $cmd every $ms milliseconds (or perhaps a bit longer).
+proc periodic {ms cmd} {
+    after $ms [list periodic $ms $cmd]
+    uplevel "\#0" $cmd
 }
 
 ## ## ## Now set things running
 
-# XXX
+# Go through $config(...) to identify labels, and under each label, buttons.
+# Ends up building:
+#       $labels -- list of labels
+#       $lbuttons($label) -- list of buttons per label
+# and using arrays $_labels(...) and $_lbuttons(...) temporarily.
+array unset _labels
+array unset _lbuttons
+array unset lbuttons
+set labels [list]
+foreach k [array names config] {
+    lassign [split $k ":"] label lfield button bfield
+    if {![info exists _labels($label)]} {
+        lappend labels $label
+        set _labels($label) 1
+        set lbuttons($label) [list]
+    }
+    if {$lfield eq "button" && ![info exists _lbuttons($label:$button)]} {
+        lappend lbuttons($label) $button
+        set _lbuttons($label:$button) 1
+    }
+}
+
+# Go through the configured labels and their buttons and set them up.
+foreach label [lsort $labels] {
+    if {![info exists config($label:source)]} {
+        badconfig "label '$label' has no source"
+        continue
+    }
+    set source [lindex $config($label:source) 0]
+    switch -- $source {
+        "listen" {
+            lassign $config($label:source) source path
+            sockptyr listen $path [list conn_add $label 1 listen]
+        }
+        "connect" {
+            lassign $config($label:source) source path
+            if {[catch {sockptyr connect $path} hdl]} {
+                conn_add $label 0 connect $hdl
+            } else {
+                conn_add $label 1 connect $hdl
+            }
+        }
+        "directory" {
+            lassign $config($label:source) source path pollint
+
+            # Monitor the directory to connect to its sockets.
+            if {$sockptyr_info(USE_INOTIFY)} {
+                # First find any sockets already in the directory.
+                read_and_connect_dir $path $label
+
+                # Use "inotify" to watch new ones.
+                sockptyr inotify $path IN_CREATE \
+                    [list read_and_connect_inotify $path $label]
+            } else {
+                # Schedule polling to happen, in which we read the directory
+                # every so often to see if anything was added.
+                periodic [expr {int(ceil($pollint * 1000.0))}] \
+                    [list read_and_connect_dir $path $label]
+            }
+        }
+        default {
+            badconfig "label '$label' unrecognized source '$source'"
+            continue
+        }
+    }
+}
 
