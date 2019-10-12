@@ -18,10 +18,16 @@
 # (compiled from sockptyr_core.c).
 set sockptyr_library_path ./sockptyr.so
 
-# $config: Configuration of what we monitor and what we do with it.
-# A list containing one list for each thing we monitor; that list in
-# turn contains:
-#       Connection source:
+# $config(...): Configuration of what we monitor and what we do with it.
+# An array with various keys and values as follows:
+#       Identify each connection with a label $label
+#           which is also used in display etc
+#           the label actually used depends on the connection source
+#           for "listen": $label:$counter
+#           for "connect": $label
+#           for "monitor": $label:[basename $filename]
+#       set config($label:source) ...
+#           specifies the connection source, one of the following lists
 #           To listen for connections on a UNIX domain stream socket:
 #               2 elements: listen $filename
 #           To connect to a UNIX domain stream socket:
@@ -32,52 +38,100 @@ set sockptyr_library_path ./sockptyr.so
 #               If "inotify" is available it uses that to monitor the
 #               directory.  Otherwise it reads the directory every
 #               $interval seconds.
-#       Connection label:
-#           1 element: $string
-#           The label actually used is:
-#               for "listen": $string:$counter
-#               for "connect": $string
-#               for "monitor": $string:$socketname
-#       One or more things that the user can do with it; each is a
-#       list containing:
-#           How it's displayed:
-#               2 elements: $icon $text
-#               $icon is the name of an image defined within this program
-#               for use as a graphical button; $text a textual alternative.
-#           What to do when clicked:
-#               To open a PTY and execute a program:
-#                   2 elements: ptyrun $command
-#                   runs shell command $command, with limited "%"
-#                   substitution:
-#                       %% - "%"
-#                       %l - label
-#                       %p - pty pathname
-#               To link the connection to itself (loopback):
-#                   1 element: loop
-# XXX consider redoing this as an array
-# XXX when building labels make sure they don't contain odd characters
-set config {
-    {listen ./listysok
-     LISTY
-     {ico_term Terminal
-      ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}}
-     {ico_back Loopback
-      loop}}
-    {directory ./sokdir
-     DIR
-     {ico_term Terminal
-      ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}}
-     {ico_back Loopback
-      loop}}
+#       set config($label:button:$text:icon) ...
+#           Define something the user can do with any connection from
+#           this source.  The value is the name of an image defined
+#           within this program for use as a graphical button.  The $text
+#           is a text string to go with it.
+#       set config($label:button:$text:ptyrun) ...
+#           When the button is activated, open a PTY and then execute
+#           the specified program.  It's a shell command with limited
+#           "%" substitution:
+#               %% - "%"
+#               %l - label
+#               %p - PTY pathname
+#       set config($label:button:$text:loopback) ...
+#           When the button is activated, link the connection to itself
+#           (loopback).
+
+set config(LISTY:source) {listen ./listysok}
+set config(LISTY:button:Terminal:icon) ico_term
+set config(LISTY:button:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
+set config(LISTY:button:Loopback:icon) ico_back
+set config(LISTY:button:Loopback:loopback) 1
+set config(DIR:source) {directory ./sokdir 20.0}
+set config(DIR:button:Terminal:icon) ico_term
+set config(DIR:button:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
+set config(DIR:button:Loopback:icon) ico_back
+set config(DIR:button:Loopback:loopback) 1
+
+## ## ## GUI setup details, like where to find pictures
+
+foreach {ilbl _ iset} {
+    ico_term {a picture of a terminal or personal computer}
+    {
+        /usr/include/X11/bitmaps/terminal "xbitmaps package on Debian"
+        /opt/local/include/X11/bitmaps/terminal "xbitmaps port in MacPorts"
+    }
+    ico_back {a picture of a bent-back arrow}
+    {
+        /usr/include/X11/bitmaps/FlipHoriz "x11-apps package on Debian"
+        /opt/local/include/X11/bitmaps/FlipHoriz "xorg-apps package on Debian"
+    }
+} {
+    foreach {ipath _} $iset {
+        set notfound 1
+        if {[file exists $ipath]} {
+            if {[catch {image create bitmap $ilbl -file $ipath} err]} {
+                puts stderr "Failed to load image $ipath: $err"
+                continue
+            }
+            set notfound 0
+            break
+        }
+    }
+    if {$notfound} {
+        puts stderr "No image found for '$ilbl'"
+        # not a fatal error, yet
+    }
 }
+
+# lblfont - font for GUI labels
+font create lblfont -family Times -size 18 -weight bold
 
 ## ## ## GUI
 
-image create bitmap ico_term \
-    -file /usr/include/X11/bitmaps/terminal
+wm iconname . "sockptyr"
+wm title . "sockptyr"
+wm resizable . 0 0
 
-image create bitmap ico_back \
-    -file /usr/include/X11/bitmaps/FlipHoriz 
+# window layout:
+#       left side: scrolling list of connections
+#       right side: info about selected connection; and some global options
+
+frame .conns
+canvas .conns.can -width 160 -height 448 -yscrollcommand {.conns.sb set} \
+    -scrollregion {0 0 160 1080}
+scrollbar .conns.sb -command {.conns.can yview}
+pack .conns.can -side left
+pack .conns.sb -side right -fill y
+pack .conns -side left
+.conns.can create rect 10 10 30 30 -fill red
+.conns.can create rect 130 10 150 30 -fill green
+.conns.can create rect 10 1050 30 1070 -fill blue
+.conns.can create rect 130 1050 150 1070 -fill purple
+
+frame .detail
+label .detail.l1 -text "sockptyr: details" -font lblfont -justify left
+frame .detail.bbb
+button .detail.bbb.x -text "Exit" -command {exit 0}
+
+pack .detail.l1 -side top -fill x
+pack .detail.bbb.x -side left
+pack .detail.bbb -side bottom -fill x
+pack .detail -side right -fill both
+
+# XXX when building conn labels make sure they don't contain odd characters
 
 ## ## ## Load the sockptyr library
 
@@ -86,8 +140,9 @@ image create bitmap ico_back \
 # having nothing come up.
 update
 if {[catch {load $sockptyr_library_path sockptyr} res]} {
-    # XXX make this show up graphically & not clobber the program
-    error "Failed to load sockptyr library from $sockptyr_library_path: $res"
+    # XXX make this show up in the GUI
+    puts stderr "Failed to load sockptyr library from $sockptyr_library_path: $res"
+    vwait forever
 }
 
 ## ## ## Now set things running
