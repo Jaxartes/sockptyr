@@ -209,6 +209,7 @@ array set sockptyr_info [sockptyr info]
 #   $conn_line2($label) maps the unique label string to descriptive text
 #   $conn_link($label) identifies the connection it's linked to if any,
 #                       by label
+#                       XXX uh, I'm not doing that, I'm doing something else
 #   $conns lists the connections by unique label in order
 # Some related tracking:
 #   $listen_counter($label) is a counter to identify the connections
