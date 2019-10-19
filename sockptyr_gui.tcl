@@ -25,7 +25,7 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 #           the label actually used depends on the connection source
 #           for "listen": $label:$counter
 #           for "connect": $label
-#           for "monitor": $label:[basename $filename]
+#           for "directory": $label:[basename $filename]
 #       set config($label:source) ...
 #           specifies the connection source, one of the following lists
 #           To listen for connections on a UNIX domain stream socket:
@@ -97,7 +97,7 @@ foreach {ilbl _ iset} {
     }
     if {$notfound} {
         puts stderr "No image found for '$ilbl'"
-        # not a fatal error, yet
+        # not a fatal error; but probably will turn out badly
     }
 }
 
@@ -109,6 +109,11 @@ font create txtfont -family Times -size 12 -weight normal
 
 # listwidth - list of scrolling connections list
 set listwidth 160
+
+# bgcolor - background color
+# fgcolor - foreground color
+set bgcolor lightgray
+set fgcolor black
 
 ## ## ## GUI
 
@@ -123,7 +128,7 @@ wm resizable . 0 0
 frame .conns
 canvas .conns.can -width $listwidth \
     -height 448 -yscrollcommand {.conns.sb set} \
-    -scrollregion [list 0 0 $listwidth 0]
+    -scrollregion [list 0 0 $listwidth 0] -background $bgcolor
 scrollbar .conns.sb -command {.conns.can yview}
 pack .conns.can -side left
 pack .conns.sb -side right -fill y
@@ -167,8 +172,6 @@ proc badconfig {msg} {
     vwait forever
 }
 
-# XXX when building conn labels make sure they don't contain odd characters
-
 ## ## ## Load the sockptyr library
 
 # The rationale for loading the library so late is that then you can see
@@ -187,22 +190,150 @@ array set sockptyr_info [sockptyr info]
 
 ## ## ## Connection handling
 
+# About how connection entries in .conns.can are tracked:
+#   $conn_hdls($label) maps the unique label string to a "sockptyr" handle
+#       or "" if it's not ok
+#   $conn_tags($label) maps the unique label string to a tag in .conns.can
+#   $conn_line1($label) maps the unique label string to descriptive text
+#   $conn_line2($label) maps the unique label string to descriptive text
+#   $conn_link($label) identifies the connection it's linked to if any,
+#                       by label
+#   $conns lists the connections by unique label in order
+# Some related tracking:
+#   $listen_counter($label) is a counter to identify the connections
+#       associated with label $label in $config(...).
+#   $conn_tags() is a counter used for assigning $conn_tags(...) values.
+
+set conn_tags() 0
+
 # conn_add: Called when there's a new connection to add to the list.
 # Parameters:
 #   $label -- source label from $config(...)
 #   $ok -- boolean: is the connection ok (1) or did it fail somehow (0)
 #   $source -- name of the connection source
-#   $args -- additional information, depending on $ok and $source:
-#       1 listen $hdl "" -- $hdl is sockptyr connection handle
-#       0 connect $err -- $err is an error message
-#       1 connect $hdl -- $hdl is sockptyr connection handle
-#       0 directory $err $name -- $err is error message; $name
-#           filename within directory
-#       1 directory $hdl $name -- $hdl is sockptyr connection handle; $name
-#           filename within directory
-proc conn_add {label ok source args} {
-    puts stderr [list XXX conn_add label $label ok $ok source $source args $args]
-    # XXX write this fn
+#   $he -- if $ok is 0: $he is an error message
+#          otherwise:   $he is a "sockptyr" connection handle
+#   $qual -- if applicable, is a name or other qualifier that came up
+#       when making the connection.  For instance, where $source = "directory"
+#       and $ok = "1", $qual is the filename of the socket within the directory
+proc conn_add {label ok source he qual} {
+    puts stderr [list conn_add label $label ok $ok source $source he $he qual $qual]
+
+    global conns conn_hdls conn_tags conn_desc conn_line1 conn_line2 conn_link
+    global listwidth config fgcolor bgcolor
+
+    # build a label for this connection
+    switch -- $source {
+        listen {
+            global listen_counter
+            if {![info exists listen_counter($label)]} {
+                set listen_counter($label) 1
+            }
+            set full_label [format {%s:%d} $label $listen_counter($label)]
+            incr listen_counter($label)
+        }
+        connect {
+            set full_label $label
+        }
+        directory {
+            set full_label [format {%s:%s} $label $qual]
+        }
+        default {
+            error "internal error: unknown source= $source"
+        }
+    }
+
+    # make sure that label is text
+    set full_label2 ""
+    for {set i 0} {$i < [string length $full_label]} {incr i} {
+        set ch [string index $full_label $i]
+        if {[string is graph -strict $ch] && $ch ne "\\"} {
+            append full_label2 $ch
+        } else {
+            append full_label2 "?"
+        }
+    }
+    set full_label $full_label2
+
+    # make sure that label is unique (and nonempty)
+    if {[info exists conn_tags($full_label)] || $full_label ne ""} {
+        for {set i 0} {1} {incr i} {
+            if {![info exists conn_tags($full_label)]} {
+                append $full_label [format .%lld $i]
+                break
+            }
+        }
+    }
+
+    # assign a tag for use in .conns.can
+    incr conn_tags()
+    set tag [format conn.%lld $conn_tags()]
+    set conn_tags($full_label) $tag
+
+    # record details
+    if {$ok} {
+        set conn_hdls($full_label) $he
+    } else {
+        set conn_hdls($full_label) ""
+    }
+    set conn_link($full_label) ""
+    switch -- $source {
+        listen {
+            set conn_line1($full_label) "Received socket connection"
+            if {$ok} {
+                set conn_line2($full_label) \
+                    "On: [lindex $config($label:source) 1]"
+            } else {
+                set conn_line2($full_label) "Failed: $he"
+            }
+        }
+        connect {
+            set conn_line1($full_label) "Socket connection"
+            if {$ok} {
+                set conn_line2($full_label) \
+                    "To: [lindex $config($label:source) 1]"
+            } else {
+                set conn_line2($full_label) "Failed: $he"
+            }
+        }
+        directory {
+            set conn_line1($full_label) "Socket connection (dir)"
+            if {$ok} {
+                set path [file join \
+                    [lindex $config($label:source) 1] $qual]
+                set conn_line2($full_label) "To: $path"
+            } else {
+                set conn_line2($full_label) "Failed: $he"
+            }
+        }
+        default {
+            error "internal error: unknown source= $source"
+        }
+    }
+
+    # Create UI elements in .conns.can; positioned later
+    .conns.can create rectangle 0 0 0 0 \
+        -fill $bgcolor -outline "" \
+        -tags [list ${tag}.r] ; # intentionally not in $tag
+    .conns.can create text 0 0 \
+        -font txtfont -fill $fgcolor -anchor nw \
+        -text $full_label -tags [list $tag ${tag}.t]
+
+    # Record this connection's existence & put the connections in order.
+    # This could obviously be done more efficiently but there are many
+    # inefficiencies around that are about as bad.
+    lappend conns $full_label
+    set conns [lsort $conns]
+
+    # Reposition all the connection labels in .conns.can.
+    set y 0
+    foreach conn $conns {
+        lassign [.conns.can bbox $conn_tags($conn)] obx1 oby1 obx2 oby2
+        .conns.can move $conn_tags($conn) 0 [expr {$y - $oby1}]
+        lassign [.conns.can bbox $conn_tags($conn)] nbx1 nby1 nbx2 nby2
+        set y [expr {$y + $nby2 - $nby1}]
+        .conns.can coords $conn_tags($conn).r 0 $nby1 $listwidth $nby2
+    }
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
@@ -336,9 +467,9 @@ foreach label [lsort $labels] {
         "connect" {
             lassign $config($label:source) source path
             if {[catch {sockptyr connect $path} hdl]} {
-                conn_add $label 0 connect $hdl
+                conn_add $label 0 connect $hdl ""
             } else {
-                conn_add $label 1 connect $hdl
+                conn_add $label 1 connect $hdl ""
             }
         }
         "directory" {
