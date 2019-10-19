@@ -38,37 +38,37 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 #               If "inotify" is available it uses that to monitor the
 #               directory.  Otherwise it reads the directory every
 #               $interval seconds.
-#       set config($label:button:$text:icon) ...
+#       set config($label:action:$text:icon) ...
 #           Define something the user can do with any connection from
 #           this source.  The value is the name of an image defined
-#           within this program for use as a graphical button.  The $text
+#           within this program for use as a graphical indicator.  The $text
 #           is a text string to go with it.
-#       set config($label:button:$text:ptyrun) ...
+#       set config($label:action:$text:ptyrun) ...
 #           When the button is activated, open a PTY and then execute
 #           the specified program.  It's a shell command with limited
 #           "%" substitution:
 #               %% - "%"
 #               %l - label
 #               %p - PTY pathname
-#       set config($label:button:$text:loopback) ...
+#       set config($label:action:$text:loopback) ...
 #           When the button is activated, link the connection to itself
 #           (loopback).
 
 set config(LISTY:source) {listen ./sockptyr_test_env_l}
-set config(LISTY:button:Terminal:icon) ico_term
-set config(LISTY:button:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
-set config(LISTY:button:Loopback:icon) ico_back
-set config(LISTY:button:Loopback:loopback) 1
+set config(LISTY:action:Terminal:icon) ico_term
+set config(LISTY:action:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
+set config(LISTY:action:Loopback:icon) ico_back
+set config(LISTY:action:Loopback:loopback) 1
 set config(CONN:source) {connect ./sockptyr_test_env_c}
-set config(CONN:button:Terminal:icon) ico_term
-set config(CONN:button:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
-set config(CONN:button:Loopback:icon) ico_back
-set config(CONN:button:Loopback:loopback) 1
+set config(CONN:action:Terminal:icon) ico_term
+set config(CONN:action:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
+set config(CONN:action:Loopback:icon) ico_back
+set config(CONN:action:Loopback:loopback) 1
 set config(DIR:source) {directory ./sockptyr_test_env_d 20.0}
-set config(DIR:button:Terminal:icon) ico_term
-set config(DIR:button:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
-set config(DIR:button:Loopback:icon) ico_back
-set config(DIR:button:Loopback:loopback) 1
+set config(DIR:action:Terminal:icon) ico_term
+set config(DIR:action:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
+set config(DIR:action:Loopback:icon) ico_back
+set config(DIR:action:Loopback:loopback) 1
 
 ## ## ## GUI setup details, like where to find pictures
 
@@ -149,6 +149,8 @@ label .detail.m.none.l2 -text "" -font txtfont -justify left \
     -wraplength $detwidth
 label .detail.m.none.l3 -text "" -font txtfont -justify left \
     -wraplength $detwidth
+label .detail.m.none.l4 -text "" -font txtfont -justify left \
+    -wraplength $detwidth
 frame .detail.m.conn
 
 proc detail_select {which} {
@@ -165,9 +167,8 @@ pack propagate .detail 0
 pack .detail.l1 -side top -fill x
 pack .detail.bbb.x -side left
 pack .detail.bbb -side bottom -fill x
-pack .detail.m.none.l1 -side top -anchor w
-pack .detail.m.none.l2 -side top -anchor w
-pack .detail.m.none.l3 -side top -anchor w
+pack .detail.m.none.l1 .detail.m.none.l2 -side top -anchor w
+pack .detail.m.none.l3 .detail.m.none.l4 -side top -anchor w
 pack .detail.m -fill both -expand 1
 pack .detail -side right -fill both
 
@@ -175,6 +176,7 @@ proc badconfig {msg} {
     puts stderr "Bad hard coded configuration: $msg"
     .detail.m.none.l2 configure -text "Bad hard coded configuration"
     .detail.m.none.l3 configure -text $msg
+    .detail.m.none.l4 configure -text ""
     detail_select none
     vwait forever
 }
@@ -188,6 +190,8 @@ update
 if {[catch {load $sockptyr_library_path sockptyr} res]} {
     puts stderr "Failed to load sockptyr library from $sockptyr_library_path: $res"
     .detail.m.none.l2 configure -text "sockptyr library not loaded"
+    .detail.m.none.l3 configure -text "error: $res"
+    .detail.m.none.l4 configure -text ""
     detail_select none
     vwait forever
 }
@@ -338,8 +342,14 @@ proc conn_add {label ok source he qual} {
     # inefficiencies around that are about as bad.
     lappend conns $conn
     set conns [lsort $conns]
+    conn_pos
+}
 
-    # Reposition all the connection labels in .conns.can.
+# conn_pos: Go through the connection list after it has changed, to
+# reposition all connections.
+proc conn_pos {} {
+    global conns conn_tags
+
     set y 0
     foreach conn $conns {
         lassign [.conns.can bbox $conn_tags($conn).c] obx1 oby1 obx2 oby2
@@ -357,7 +367,7 @@ set conn_sel ""
 proc conn_sel {conn} {
     puts stderr [list conn_sel $conn]
 
-    global conn_sel bgcolor fgcolor conn_tags conn_line1 conn_line2
+    global conn_sel bgcolor fgcolor conn_tags conn_line1 conn_line2 conn_link
 
     if {$conn_sel ne ""} {
         # deselect the current one
@@ -371,12 +381,18 @@ proc conn_sel {conn} {
         .detail.m.none.l1 configure -text "No selection"
         .detail.m.none.l2 configure -text ""
         .detail.m.none.l3 configure -text ""
+        .detail.m.none.l4 configure -text ""
     } else {
         # selecting a particular connection
         set tag $conn_tags($conn)
         .detail.m.none.l1 configure -text $conn
         .detail.m.none.l2 configure -text $conn_line1($conn)
         .detail.m.none.l3 configure -text $conn_line2($conn)
+        if {$conn_link($conn) eq ""} {
+            .detail.m.none.l4 configure -text ""
+        } else {
+            .detail.m.none.l4 configure -text "Linked to: $conn_link($conn)"
+        }
         .conns.can itemconfigure $tag.r -fill $fgcolor
         .conns.can itemconfigure $tag.c -fill $bgcolor
     }
@@ -384,6 +400,54 @@ proc conn_sel {conn} {
     set conn_sel $conn
 }
 conn_sel ""
+
+# conn_del: Remove a connection from the connection list.
+# XXX use & test this
+proc conn_del {conn} {
+    puts stderr [list conn_del $conn]
+
+    global conns conn_sel
+
+    if {$conn eq ""} return ; # shouldn't happen
+
+    if {$conn_sel eq $conn} {
+        # This connection was selected; deselect it.
+        conn_sel ""
+    }
+
+    # remove from $conns
+
+    set i [lsearch -exact $conns $conn]
+    if {$i >= 0} {
+        set conns [lreplace $conns $i $i]
+    }
+
+    # remove from the GUI list of connections and from the various arrays
+    global conn_hdls conn_tags conn_line1 conn_line2 conn_link
+
+    .conns.can delete $conn_tags($conn)
+    unset conn_tags($conn)
+    unset conn_line1($conn)
+    unset conn_line2($conn)
+    if {$conn_link($conn) ne ""} {
+        sockptyr link $conn_link($conn)
+        set conn_link($conn_link($conn)) ""
+        if {$conn_link($conn) eq $conn_sel} {
+            # It's linked to the selected connection.  Reselect to update
+            # the details shown.
+            conn_sel $conn_link($conn)
+        }
+    }
+    unset conn_link($conn)
+    if {$conn_hdls($conn) ne ""} {
+        sockptyr close $conn_hdls($conn)
+    }
+    set conn_hdls($conn)
+
+    # redraw the GUI list of connections
+    
+    conn_pos
+}
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
 # it that weren't seen in previous reads.
