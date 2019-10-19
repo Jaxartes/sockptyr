@@ -108,7 +108,10 @@ font create lblfont -family Times -size 18 -weight bold
 font create txtfont -family Times -size 12 -weight normal
 
 # listwidth - list of scrolling connections list
-set listwidth 160
+set listwidth 192
+
+# detwidth - list of detail display
+set detwidth 384
 
 # bgcolor - background color
 # fgcolor - foreground color
@@ -134,15 +137,18 @@ pack .conns.can -side left
 pack .conns.sb -side right -fill y
 pack .conns -side left
 
-frame .detail -width 448
+frame .detail -width $detwidth
 label .detail.l1 -text "sockptyr: details" -font lblfont -justify left
 frame .detail.bbb
 button .detail.bbb.x -text "Exit" -command {exit 0}
 frame .detail.m
 frame .detail.m.none
-label .detail.m.none.l1 -text "No selection" -font lblfont -justify left
-label .detail.m.none.l2 -text "" -font txtfont -justify left
-label .detail.m.none.l3 -text "" -font txtfont -justify left
+label .detail.m.none.l1 -text "No selection" -font lblfont -justify left \
+    -wraplength $detwidth
+label .detail.m.none.l2 -text "" -font txtfont -justify left \
+    -wraplength $detwidth
+label .detail.m.none.l3 -text "" -font txtfont -justify left \
+    -wraplength $detwidth
 frame .detail.m.conn
 
 proc detail_select {which} {
@@ -155,12 +161,13 @@ proc detail_select {which} {
 }
 detail_select none
 
+pack propagate .detail 0
 pack .detail.l1 -side top -fill x
 pack .detail.bbb.x -side left
 pack .detail.bbb -side bottom -fill x
-pack .detail.m.none.l1 -side top -fill x
-pack .detail.m.none.l2 -side top -fill x
-pack .detail.m.none.l3 -side top -fill x
+pack .detail.m.none.l1 -side top -anchor w
+pack .detail.m.none.l2 -side top -anchor w
+pack .detail.m.none.l3 -side top -anchor w
 pack .detail.m -fill both -expand 1
 pack .detail -side right -fill both
 
