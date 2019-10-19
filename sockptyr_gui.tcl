@@ -203,6 +203,7 @@ array set sockptyr_info [sockptyr info]
 #   $listen_counter($label) is a counter to identify the connections
 #       associated with label $label in $config(...).
 #   $conn_tags() is a counter used for assigning $conn_tags(...) values.
+#   $conn_sel is the selected connection's label
 
 set conn_tags() 0
 
@@ -229,14 +230,14 @@ proc conn_add {label ok source he qual} {
             if {![info exists listen_counter($label)]} {
                 set listen_counter($label) 1
             }
-            set full_label [format {%s:%d} $label $listen_counter($label)]
+            set conn [format {%s:%d} $label $listen_counter($label)]
             incr listen_counter($label)
         }
         connect {
-            set full_label $label
+            set conn $label
         }
         directory {
-            set full_label [format {%s:%s} $label $qual]
+            set conn [format {%s:%s} $label $qual]
         }
         default {
             error "internal error: unknown source= $source"
@@ -244,22 +245,22 @@ proc conn_add {label ok source he qual} {
     }
 
     # make sure that label is text
-    set full_label2 ""
-    for {set i 0} {$i < [string length $full_label]} {incr i} {
-        set ch [string index $full_label $i]
+    set conn2 ""
+    for {set i 0} {$i < [string length $conn]} {incr i} {
+        set ch [string index $conn $i]
         if {[string is graph -strict $ch] && $ch ne "\\"} {
-            append full_label2 $ch
+            append conn2 $ch
         } else {
-            append full_label2 "?"
+            append conn2 "?"
         }
     }
-    set full_label $full_label2
+    set conn $conn2
 
     # make sure that label is unique (and nonempty)
-    if {[info exists conn_tags($full_label)] || $full_label ne ""} {
+    if {[info exists conn_tags($conn)] || $conn ne ""} {
         for {set i 0} {1} {incr i} {
-            if {![info exists conn_tags($full_label)]} {
-                append $full_label [format .%lld $i]
+            if {![info exists conn_tags($conn)]} {
+                append $conn [format .%lld $i]
                 break
             }
         }
@@ -268,42 +269,42 @@ proc conn_add {label ok source he qual} {
     # assign a tag for use in .conns.can
     incr conn_tags()
     set tag [format conn.%lld $conn_tags()]
-    set conn_tags($full_label) $tag
+    set conn_tags($conn) $tag
 
     # record details
     if {$ok} {
-        set conn_hdls($full_label) $he
+        set conn_hdls($conn) $he
     } else {
-        set conn_hdls($full_label) ""
+        set conn_hdls($conn) ""
     }
-    set conn_link($full_label) ""
+    set conn_link($conn) ""
     switch -- $source {
         listen {
-            set conn_line1($full_label) "Received socket connection"
+            set conn_line1($conn) "Received socket connection"
             if {$ok} {
-                set conn_line2($full_label) \
+                set conn_line2($conn) \
                     "On: [lindex $config($label:source) 1]"
             } else {
-                set conn_line2($full_label) "Failed: $he"
+                set conn_line2($conn) "Failed: $he"
             }
         }
         connect {
-            set conn_line1($full_label) "Socket connection"
+            set conn_line1($conn) "Socket connection"
             if {$ok} {
-                set conn_line2($full_label) \
+                set conn_line2($conn) \
                     "To: [lindex $config($label:source) 1]"
             } else {
-                set conn_line2($full_label) "Failed: $he"
+                set conn_line2($conn) "Failed: $he"
             }
         }
         directory {
-            set conn_line1($full_label) "Socket connection (dir)"
+            set conn_line1($conn) "Socket connection (dir)"
             if {$ok} {
                 set path [file join \
                     [lindex $config($label:source) 1] $qual]
-                set conn_line2($full_label) "To: $path"
+                set conn_line2($conn) "To: $path"
             } else {
-                set conn_line2($full_label) "Failed: $he"
+                set conn_line2($conn) "Failed: $he"
             }
         }
         default {
@@ -311,30 +312,71 @@ proc conn_add {label ok source he qual} {
         }
     }
 
-    # Create UI elements in .conns.can; positioned later
+    # Create UI elements in .conns.can; positioned later.
+    # tagging:
+    #       $tag - all the stuff for this connection
+    #       $tag.t - text label for the connection
+    #       $tag.r - rectangule around the connection's stuff
+    #       $tag.c - everything but $tag.r
     .conns.can create rectangle 0 0 0 0 \
         -fill $bgcolor -outline "" \
-        -tags [list ${tag}.r] ; # intentionally not in $tag
+        -tags [list $tag $tag.r]
     .conns.can create text 0 0 \
         -font txtfont -fill $fgcolor -anchor nw \
-        -text $full_label -tags [list $tag ${tag}.t]
+        -text $conn -tags [list $tag $tag.t $tag.c]
+    .conns.can bind $tag <Button-1> [list conn_sel $conn]
 
     # Record this connection's existence & put the connections in order.
     # This could obviously be done more efficiently but there are many
     # inefficiencies around that are about as bad.
-    lappend conns $full_label
+    lappend conns $conn
     set conns [lsort $conns]
 
     # Reposition all the connection labels in .conns.can.
     set y 0
     foreach conn $conns {
-        lassign [.conns.can bbox $conn_tags($conn)] obx1 oby1 obx2 oby2
+        lassign [.conns.can bbox $conn_tags($conn).c] obx1 oby1 obx2 oby2
         .conns.can move $conn_tags($conn) 0 [expr {$y - $oby1}]
-        lassign [.conns.can bbox $conn_tags($conn)] nbx1 nby1 nbx2 nby2
+        lassign [.conns.can bbox $conn_tags($conn).c] nbx1 nby1 nbx2 nby2
         set y [expr {$y + $nby2 - $nby1}]
         .conns.can coords $conn_tags($conn).r 0 $nby1 $listwidth $nby2
     }
 }
+
+# conn_sel: Called to select a connection from the connection list.
+# Parameters: unique connection label; or, empty string to deselect whatever's
+# selected.
+set conn_sel ""
+proc conn_sel {conn} {
+    puts stderr [list conn_sel $conn]
+
+    global conn_sel bgcolor fgcolor conn_tags conn_line1 conn_line2
+
+    if {$conn_sel ne ""} {
+        # deselect the current one
+        set tag $conn_tags($conn_sel)
+        .conns.can itemconfigure $tag.r -fill $bgcolor
+        .conns.can itemconfigure $tag.c -fill $fgcolor
+    }
+
+    if {$conn eq ""} {
+        # selecting nothing
+        .detail.m.none.l1 configure -text "No selection"
+        .detail.m.none.l2 configure -text ""
+        .detail.m.none.l3 configure -text ""
+    } else {
+        # selecting a particular connection
+        set tag $conn_tags($conn)
+        .detail.m.none.l1 configure -text $conn
+        .detail.m.none.l2 configure -text $conn_line1($conn)
+        .detail.m.none.l3 configure -text $conn_line2($conn)
+        .conns.can itemconfigure $tag.r -fill $fgcolor
+        .conns.can itemconfigure $tag.c -fill $bgcolor
+    }
+
+    set conn_sel $conn
+}
+conn_sel ""
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
 # it that weren't seen in previous reads.
