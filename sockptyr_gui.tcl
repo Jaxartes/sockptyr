@@ -1,7 +1,9 @@
-#!wish
+#!/bin/sh
 # sockptyr_gui.tcl
 # Copyright (C) 2019, Jeremy Dilatush.  All rights reserved.
 #
+# the next line restarts using wish \
+exec /usr/bin/wish "$0" ${1+"$@"}
 # GUI for sockptyr: A Tk application that monitors for connections you
 # want to hook up to, and gives you buttons for, e.g. starting terminal
 # windows hooked up to them.
@@ -207,9 +209,10 @@ array set sockptyr_info [sockptyr info]
 #   $conn_tags($label) maps the unique label string to a tag in .conns.can
 #   $conn_line1($label) maps the unique label string to descriptive text
 #   $conn_line2($label) maps the unique label string to descriptive text
-#   $conn_link($label) identifies the connection it's linked to if any,
-#                       by label
-#                       XXX uh, I'm not doing that, I'm doing something else
+#   $conn_line3($label) maps the unique label string to descriptive text
+#   $conn_deact($label) is code to run to cancel whatever action had been
+#                       done on the connection, like when closing it
+#                       or performing a contrary action
 #   $conns lists the connections by unique label in order
 # Some related tracking:
 #   $listen_counter($label) is a counter to identify the connections
@@ -232,7 +235,8 @@ set conn_tags() 0
 proc conn_add {label ok source he qual} {
     puts stderr [list conn_add label $label ok $ok source $source he $he qual $qual]
 
-    global conns conn_hdls conn_tags conn_desc conn_line1 conn_line2 conn_link
+    global conns conn_hdls conn_tags conn_desc conn_deact
+    global conn_line1 conn_line2 conn_line3
     global listwidth config fgcolor bgcolor
 
     # build a label for this connection
@@ -289,7 +293,8 @@ proc conn_add {label ok source he qual} {
     } else {
         set conn_hdls($conn) ""
     }
-    set conn_link($conn) ""
+    set conn_line3($conn) ""
+    set conn_deact($conn) ""
     switch -- $source {
         listen {
             set conn_line1($conn) "Received socket connection"
@@ -349,7 +354,7 @@ proc conn_add {label ok source he qual} {
 # conn_pos: Go through the connection list after it has changed, to
 # reposition all connections.
 proc conn_pos {} {
-    global conns conn_tags
+    global conns conn_tags listwidth
 
     set y 0
     foreach conn $conns {
@@ -368,7 +373,8 @@ set conn_sel ""
 proc conn_sel {conn} {
     puts stderr [list conn_sel $conn]
 
-    global conn_sel bgcolor fgcolor conn_tags conn_line1 conn_line2 conn_link
+    global conn_sel bgcolor fgcolor conn_tags
+    global conn_line1 conn_line2 conn_line3
 
     if {$conn_sel ne ""} {
         # deselect the current one
@@ -389,11 +395,7 @@ proc conn_sel {conn} {
         .detail.m.none.l1 configure -text $conn
         .detail.m.none.l2 configure -text $conn_line1($conn)
         .detail.m.none.l3 configure -text $conn_line2($conn)
-        if {$conn_link($conn) eq ""} {
-            .detail.m.none.l4 configure -text ""
-        } else {
-            .detail.m.none.l4 configure -text "Linked to: $conn_link($conn)"
-        }
+        .detail.m.none.l4 configure -text $conn_line3($conn)
         .conns.can itemconfigure $tag.r -fill $fgcolor
         .conns.can itemconfigure $tag.c -fill $bgcolor
     }
@@ -424,26 +426,22 @@ proc conn_del {conn} {
     }
 
     # remove from the GUI list of connections and from the various arrays
-    global conn_hdls conn_tags conn_line1 conn_line2 conn_link
+    global conn_hdls conn_tags conn_deact
+    global conn_line1 conn_line2 conn_line3
 
     .conns.can delete $conn_tags($conn)
     unset conn_tags($conn)
     unset conn_line1($conn)
     unset conn_line2($conn)
-    if {$conn_link($conn) ne ""} {
-        sockptyr link $conn_link($conn)
-        set conn_link($conn_link($conn)) ""
-        if {$conn_link($conn) eq $conn_sel} {
-            # It's linked to the selected connection.  Reselect to update
-            # the details shown.
-            conn_sel $conn_link($conn)
-        }
+    unset conn_line3($conn)
+    if {$conn_deact ne ""} {
+        eval $conn_deact
     }
-    unset conn_link($conn)
+    unset conn_deact($conn)
     if {$conn_hdls($conn) ne ""} {
         sockptyr close $conn_hdls($conn)
     }
-    set conn_hdls($conn)
+    unset conn_hdls($conn)
 
     # redraw the GUI list of connections
     
