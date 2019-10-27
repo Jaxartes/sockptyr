@@ -74,6 +74,8 @@ set config(DIR:action:Loopback:loopback) 1
 
 ## ## ## GUI setup details, like where to find pictures
 
+rename send {}
+
 foreach {ilbl _ iset} {
     ico_term {a picture of a terminal or personal computer}
     {
@@ -115,6 +117,9 @@ set listwidth 192
 # detwidth - list of detail display
 set detwidth 384
 
+# winheight - height of window
+set winheight 448
+
 # bgcolor - background color
 # fgcolor - foreground color
 set bgcolor lightgray
@@ -132,14 +137,14 @@ wm resizable . 0 0
 
 frame .conns
 canvas .conns.can -width $listwidth \
-    -height 448 -yscrollcommand {.conns.sb set} \
+    -height $winheight -yscrollcommand {.conns.sb set} \
     -scrollregion [list 0 0 $listwidth 0] -background $bgcolor
 scrollbar .conns.sb -command {.conns.can yview}
 pack .conns.can -side left
 pack .conns.sb -side right -fill y
 pack .conns -side left
 
-frame .detail -width $detwidth
+frame .detail -width $detwidth -height $winheight
 label .detail.l1 -text "sockptyr: details" -font lblfont -justify left
 frame .detail.bbb
 button .detail.bbb.x -text "Exit" -command {exit 0}
@@ -167,12 +172,21 @@ detail_select none
 
 pack propagate .detail 0
 pack .detail.l1 -side top -fill x
-pack .detail.bbb.x -side left
-pack .detail.bbb -side bottom -fill x
 pack .detail.m.none.l1 .detail.m.none.l2 -side top -anchor w
 pack .detail.m.none.l3 .detail.m.none.l4 -side top -anchor w
-pack .detail.m -fill both -expand 1
+pack .detail.m -side top -fill both -expand 1
+pack .detail.bbb.x -side left
+pack .detail.bbb -side bottom -fill x
 pack .detail -side right -fill both
+
+# Make the buttons appear properly on macOS native interface.
+if {[tk windowingsystem] eq "aqua"} {
+    puts stderr "macOS (non-X11) hack running"
+    update
+    .detail.bbb.x configure -width 5 -height 1 -borderwidth 1
+    update
+    # XXX doesn't work anyway; nothing I've tried has
+}
 
 proc badconfig {msg} {
     puts stderr "Bad hard coded configuration: $msg"
