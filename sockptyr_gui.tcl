@@ -60,13 +60,15 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 #               config label
 #               full label
 #           Pre-coded commands:
-#               conn_action_ptyrun $cmd $cfglbl $fulllbl
+#               conn_action_ptyrun $cmd $statlong $statshort $cfglbl $fulllbl
 #                   Open a PTY and execute the specified program $cmd,
 #                   a shell command with limited "%" substitution:
 #                       %% - "%"
 #                       %l - full label
 #                       %p - PTY pathname
-#                   XXX code it
+#                   Usually the command should end with "&".
+#                   $statlong & $statshort are long & short status strings
+#                   to show for the connection once this is done.
 #               conn_action_loopback $cfglbl $fulllbl
 #                   Hook the connection up to itself (loopback).
 #               conn_action_close $cfglbl $fulllbl
@@ -74,7 +76,7 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 
 set config(LISTY:source) {listen ./sockptyr_test_env_l}
 set config(LISTY:button:0:text) Terminal
-set config(LISTY:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}}
+set config(LISTY:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
 set config(LISTY:button:1:text) Loopback
 set config(LISTY:button:1:action) conn_action_loopback
 set config(LISTY:button:2:text) Close
@@ -82,7 +84,7 @@ set config(LISTY:button:2:action) conn_action_close
 set config(LISTY:button:2:always) 1
 set config(CONN:source) {connect ./sockptyr_test_env_c}
 set config(CONN:button:0:text) Terminal
-set config(CONN:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}}
+set config(CONN:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
 set config(CONN:button:1:text) Loopback
 set config(CONN:button:1:action) conn_action_loopback
 set config(CONN:button:2:text) Close
@@ -332,8 +334,6 @@ array set sockptyr_info [sockptyr info]
 #   $conn_tags() is a counter used for assigning $conn_tags(...) values.
 #   $conn_sel is the selected connection's label
 
-# XXX add a list background alternation to match lines to notes better
-
 set conn_tags() 0
 
 # conn_add: Called when there's a new connection to add to the list.
@@ -467,6 +467,11 @@ proc conn_add {label ok source he qual} {
         -font txtfont -fill $fgcolor -anchor ne \
         -text "" -tags [list $tag $tag.n $tag.c]
     .conns.can bind $tag <Button-1> [list conn_sel $conn]
+
+    # record status
+    if {$conn_hdls($conn) ne ""} {
+        conn_record_status $conn "" ""
+    }
 
     # Record this connection's existence & put the connections in order.
     # This could obviously be done more efficiently but there are many
@@ -619,6 +624,10 @@ proc conn_del {conn} {
 proc conn_record_status {conn long short} {
     global conn_line3 conn_sel conn_tags
 
+    if {$long eq ""} {
+        set long "One-sided"
+    }
+
     set conn_line3($conn) "Status: $long"
     .conns.can itemconfigure $conn_tags($conn).n -text $short
 
@@ -647,8 +656,8 @@ proc conn_action_loopback {cfg conn} {
 
     global conn_deact conn_hdls
 
+    # undo whatever was done before
     if {$conn_deact($conn) ne ""} {
-        # undo whatever was done before
         uplevel "#0" $conn_deact($conn)
         set conn_deact($conn) ""
     }
@@ -657,6 +666,74 @@ proc conn_action_loopback {cfg conn} {
     }
     sockptyr link $conn_hdls($conn) $conn_hdls($conn)
     conn_record_status $conn "Connected in loopback" "L"
+}
+
+# conn_action_ptyrun: Handle GUI "ptyrun" buttons (such as "Terminal") on
+# a connection.  Opens a PTY and executes a process to run on it.
+#       $cmd = shell command to run with limited "%" substitution
+#       $statlong, $statshort = long & short connection status strings
+#       $cfg = configuration label for the connection
+#       $conn = full label for the connection
+proc conn_action_ptyrun {cmd statlong statshort cfg conn} {
+    puts stderr [list conn_action_ptyrun $cmd $statlong $statshort $cfg $conn]
+
+    global conn_deact conn_hdls
+
+    # undo whatever was done before
+    if {$conn_deact($conn) ne ""} {
+        uplevel "#0" $conn_deact($conn)
+        set conn_deact($conn) ""
+    }
+
+    # get the PTY
+    lassign [sockptyr open_pty] pty_hdl pty_path
+
+    # Perform "%" substitution on cmd.  This could be faster than it is,
+    # by using "string first" to skip over long stretches without "%", but
+    # that would make the code more complicated.
+    set cmd2 ""
+    for {set i 0} {$i < [string length $cmd]} {incr i} {
+        set ch [string index $cmd $i]
+        if {$ch eq "%"} {
+            # "%" character, substituted
+            incr i
+            set ch [string index $cmd $i]
+            switch -- $ch {
+                "%" {
+                    # "%%" means "%"
+                    append cmd2 "%"
+                }
+                "l" {
+                    # "%l" subs in $conn (which is made sure to be safe
+                    # text when it's created in "conn_add")
+                    append cmd2 $conn
+                }
+                "p" {
+                    # "%p" subs in the PTY path
+                    append cmd2 $pty_path
+                }
+                default {
+                    puts stderr "unknown % sequence in command, not running"
+                    sockptyr close $pty_hdl
+                    return
+                }
+            }
+        } else {
+            # normal character, unsubstituted
+            append cmd2 $ch
+        }
+    }
+
+    # Execute that command
+    puts stderr [list about to execute: $cmd2]
+    exec sh -c $cmd2 </dev/null >@stdout 2>@stderr
+
+    # Linkage, status, tracking, and cleanup
+    sockptyr link $conn_hdls($conn) $pty_hdl
+    conn_record_status $conn "$statlong ($pty_path)" $statshort
+    set conn_deact($conn) [list ptyrun_byebye $conn $pty_hdl]
+    sockptyr onclose $conn_hdls($conn) [list ptyrun_byebye $conn $pty_hdl]
+    sockptyr onerror $conn_hdls($conn) [list conn_onerror PTY-${conn}]
 }
 
 # conn_onclose: Run when a connection gets closed (and not by us).
@@ -687,6 +764,22 @@ proc conn_onerror {conn ekw emsg} {
     # And that's all we do, display the message on the terminal.  If we
     # wanted to be fancy we could display it in the GUI.  It doesn't
     # seem worth it at the moment.
+}
+
+# ptyrun_byebye: Run when a connection set up with "conn_action_ptyrun"
+# is ended for whetever reason, to clean up after it.
+#       $conn = full label for the connection
+#       $pty_hdl = handle for the PTY it's connected to
+proc ptyrun_byebye {conn pty_hdl} {
+    puts stderr [list ptyrun_byebye $conn $pty_hdl]
+
+    global conn_hdls
+
+    sockptyr link $conn_hdls($conn)
+    sockptyr close $pty_hdl
+    conn_record_status $conn "" ""
+
+    # XXX this doesn't actually close the terminal; nor detect its closing
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
