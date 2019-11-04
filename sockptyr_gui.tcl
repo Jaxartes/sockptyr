@@ -329,6 +329,8 @@ array set sockptyr_info [sockptyr info]
 #   $conn_tags() is a counter used for assigning $conn_tags(...) values.
 #   $conn_sel is the selected connection's label
 
+# XXX add a list background alternation to match lines to notes better
+
 set conn_tags() 0
 
 # conn_add: Called when there's a new connection to add to the list.
@@ -439,11 +441,18 @@ proc conn_add {label ok source he qual} {
         }
     }
 
+    # Register handlers for things happening on the connection
+    if {$conn_hdls($conn) ne ""} {
+        sockptyr onclose $conn_hdls($conn) [list conn_onclose $conn]
+        sockptyr onerror $conn_hdls($conn) [list XXX conn_onerror]
+    }
+
     # Create UI elements in .conns.can; positioned later.
     # tagging:
     #       $tag - all the stuff for this connection
-    #       $tag.t - text label for the connection
-    #       $tag.r - rectangule around the connection's stuff
+    #       $tag.t - text label for the connection (left side)
+    #       $tag.n - text note for the connection (right side)
+    #       $tag.r - rectangle around the connection's stuff
     #       $tag.c - everything but $tag.r
     .conns.can create rectangle 0 0 0 0 \
         -fill $bgcolor -outline "" \
@@ -451,6 +460,9 @@ proc conn_add {label ok source he qual} {
     .conns.can create text 0 0 \
         -font txtfont -fill $fgcolor -anchor nw \
         -text $conn -tags [list $tag $tag.t $tag.c]
+    .conns.can create text $listwidth 0 \
+        -font txtfont -fill $fgcolor -anchor ne \
+        -text "" -tags [list $tag $tag.n $tag.c]
     .conns.can bind $tag <Button-1> [list conn_sel $conn]
 
     # Record this connection's existence & put the connections in order.
@@ -542,10 +554,7 @@ proc conn_sel {conn} {
 }
 conn_sel ""
 
-# XXX add onclose & onerror handling
-
 # conn_del: Remove a connection from the connection list.
-# XXX use & test this
 proc conn_del {conn} {
     puts stderr [list conn_del $conn]
 
@@ -592,6 +601,20 @@ proc conn_del {conn} {
     conn_pos
 }
 
+# conn_record_status: Record connection status like linked or not open.
+proc conn_record_status {conn long short} {
+    global conn_line3 conn_sel conn_tags
+
+    set conn_line3($conn) "Status: $long"
+    .conns.can itemconfigure $conn_tags($conn).n -text $short
+
+    if {$conn_sel eq $conn} {
+        # This connection was selected; reselect it for updated
+        # information.
+        conn_sel $conn
+    }
+}
+
 # conn_action_close: Handle the GUI "close" button on a connection, to close
 # it and remove it from the list.
 #       $cfg = configuration label for the connection
@@ -607,7 +630,9 @@ proc conn_action_close {cfg conn} {
 #       $conn = full label for the connection
 proc conn_action_loopback {cfg conn} {
     puts stderr [list conn_action_loopback $cfg $conn]
+
     global conn_deact conn_hdls
+
     if {$conn_deact($conn) ne ""} {
         # undo whatever was done before
         uplevel "#0" $conn_deact($conn)
@@ -617,8 +642,25 @@ proc conn_action_loopback {cfg conn} {
         error "cannot do loopback on a connection that's closed"
     }
     sockptyr link $conn_hdls($conn) $conn_hdls($conn)
-    set conn_deact($conn) [list sockptyr link $conn_hdls($conn)]
-    # XXX add indicator of what's been done to connection
+    conn_record_status $conn "Connected in loopback" "L"
+}
+
+# conn_onclose: Run when a connection gets closed (and not by us).
+#       $conn = full label for the connection
+proc conn_onclose {conn} {
+    puts stderr [list conn_onclose $conn]
+
+    global conn_hdls
+
+    if {$conn_hdls($conn) ne ""} {
+        # get rid of the connection handle
+        sockptyr onclose $conn_hdls($conn)
+        sockptyr onerror $conn_hdls($conn)
+        sockptyr close $conn_hdls($conn)
+        set conn_hdls($conn) ""
+    }
+
+    conn_record_status $conn "Closed" "C"
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
