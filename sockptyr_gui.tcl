@@ -49,9 +49,6 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 #           somehow and one to close it.  Perhaps more.
 #       set config($label:button:$num:text) ...
 #           Text to show on the button
-#       set config($label:button:$num:icon) ...
-#           Image to show on this button -- name of one defined in this
-#           program.
 #       set config($label:button:$num:always) ...
 #           Flag indicating this button is always applicable even when the
 #           connection has been disconnected.  1 is true, 0 or absence is
@@ -79,24 +76,18 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 
 set config(LISTY:source) {listen ./sockptyr_test_env_l}
 set config(LISTY:button:0:text) Terminal
-set config(LISTY:button:0:icon) ico_term
 set config(LISTY:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}}
 set config(LISTY:button:1:text) Loopback
-set config(LISTY:button:1:icon) ico_back
 set config(LISTY:button:1:action) conn_action_loopback
 set config(LISTY:button:2:text) Close
-#set config(LISTY:button:2:icon) XXX
 set config(LISTY:button:2:action) conn_action_close
 set config(LISTY:button:2:always) 1
 set config(CONN:source) {connect ./sockptyr_test_env_c}
 set config(CONN:button:0:text) Terminal
-set config(CONN:button:0:icon) ico_term
 set config(CONN:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}}
 set config(CONN:button:1:text) Loopback
-set config(CONN:button:1:icon) ico_back
 set config(CONN:button:1:action) conn_action_loopback
 set config(CONN:button:2:text) Close
-#set config(CONN:button:2:icon) XXX
 set config(CONN:button:2:action) conn_action_close
 set config(CONN:button:2:always) 1
 
@@ -171,7 +162,7 @@ if {$aqua_fake_buttons && [tk windowingsystem] eq "aqua"} {
     set fake_btn_cfg(bwd) 5         ; # border width
     set fake_btn_cfg(fnt) lblfont   ; # font
 
-    proc button {bname args} {
+    proc fake_btn {bname args} {
         global fake_btn_state fake_btn_cfg
 
         set btext "?"
@@ -244,6 +235,9 @@ if {$aqua_fake_buttons && [tk windowingsystem] eq "aqua"} {
             uplevel "#0" $bcommand
         }
     }
+    set Button fake_btn
+} else {
+    set Button button
 }
 
 wm iconname . "sockptyr"
@@ -266,8 +260,10 @@ pack .conns -side left
 frame .detail -width $detwidth -height $winheight
 label .detail.l1 -text "sockptyr: details" -font lblfont -justify left
 frame .detail.ubb
+canvas .detail.div -width 8 -height 8
+.detail.div create line -4096 4 4096 4 -fill black
 frame .detail.lbb
-button .detail.lbb.x -text "Exit" -command {exit 0}
+$Button .detail.lbb.x -text "Exit" -command {exit 0}
 frame .detail.m
 label .detail.m.l1 -text "No selection" -font lblfont -justify left \
     -wraplength $detwidth
@@ -284,6 +280,7 @@ pack .detail.m.l1 .detail.m.l2 -side top -anchor w
 pack .detail.m.l3 .detail.m.l4 -side top -anchor w
 pack .detail.m -side top -fill both -expand 1
 pack .detail.ubb -side top -fill x
+pack .detail.div -side top -fill x
 pack .detail.lbb.x -side left
 pack .detail.lbb -side bottom -fill x
 pack .detail -side right -fill both
@@ -516,7 +513,31 @@ proc conn_sel {conn} {
         .conns.can itemconfigure $tag.c -fill $bgcolor
         frame .detail.ubb.if
         pack .detail.ubb.if -expand 1 -fill both
-        # XXX add buttons for any available operations plus close
+
+        # and buttons for it
+        global config conn_cfgs conn_hdls Button
+        set cfg $conn_cfgs($conn)
+        for {set i 0} {[info exists config($cfg:button:$i:action)]} {incr i} {
+            if {$conn_hdls($conn) eq ""} {
+                # The connection doesn't really exist, is the button still
+                # applicable?
+                if {!([info exists config($cfg:button:$i:always)] &&
+                      $config($cfg:button:$i:always))} {
+                    # nope, skip it
+                    continue
+                }
+            }
+            set cmd [list $Button .detail.ubb.if.b$i]
+            set cmdcmd $config($cfg:button:$i:action)
+            lappend cmdcmd $cfg
+            lappend cmdcmd $conn
+            lappend cmd -command $cmdcmd
+            if {[info exists config($cfg:button:$i:text)]} {
+                lappend cmd -text $config($cfg:button:$i:text)
+            }
+            eval $cmd
+            pack .detail.ubb.if.b$i -side left
+        }
     }
 
     set conn_sel $conn
