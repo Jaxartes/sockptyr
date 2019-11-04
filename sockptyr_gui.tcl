@@ -45,12 +45,16 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 #           this source.  The value is the name of an image defined
 #           within this program for use as a graphical indicator.  The $text
 #           is a text string to go with it.
+#
+#           There should be at least two buttons, one to use the connection
+#           somehow and one to close it.  Perhaps more.
+#           XXX change the actions to be numbered so they have an order
 #       set config($label:action:$text:ptyrun) ...
 #           When the button is activated, open a PTY and then execute
 #           the specified program.  It's a shell command with limited
 #           "%" substitution:
 #               %% - "%"
-#               %l - label
+#               %l - full label
 #               %p - PTY pathname
 #       set config($label:action:$text:loopback) ...
 #           When the button is activated, link the connection to itself
@@ -237,45 +241,34 @@ pack .conns -side left
 
 frame .detail -width $detwidth -height $winheight
 label .detail.l1 -text "sockptyr: details" -font lblfont -justify left
-frame .detail.bbb
-button .detail.bbb.x -text "Exit" -command {exit 0}
+frame .detail.ubb
+frame .detail.lbb
+button .detail.lbb.x -text "Exit" -command {exit 0}
 frame .detail.m
-frame .detail.m.none
-label .detail.m.none.l1 -text "No selection" -font lblfont -justify left \
+label .detail.m.l1 -text "No selection" -font lblfont -justify left \
     -wraplength $detwidth
-label .detail.m.none.l2 -text "" -font txtfont -justify left \
+label .detail.m.l2 -text "" -font txtfont -justify left \
     -wraplength $detwidth
-label .detail.m.none.l3 -text "" -font txtfont -justify left \
+label .detail.m.l3 -text "" -font txtfont -justify left \
     -wraplength $detwidth
-label .detail.m.none.l4 -text "" -font txtfont -justify left \
+label .detail.m.l4 -text "" -font txtfont -justify left \
     -wraplength $detwidth
-frame .detail.m.conn
-
-proc detail_select {which} {
-    foreach which2 {none conn} {
-        pack forget .detail.m.$which2
-        if {$which eq $which2} {
-            pack .detail.m.$which -fill both
-        }
-    }
-}
-detail_select none
 
 pack propagate .detail 0
 pack .detail.l1 -side top -fill x
-pack .detail.m.none.l1 .detail.m.none.l2 -side top -anchor w
-pack .detail.m.none.l3 .detail.m.none.l4 -side top -anchor w
+pack .detail.m.l1 .detail.m.l2 -side top -anchor w
+pack .detail.m.l3 .detail.m.l4 -side top -anchor w
 pack .detail.m -side top -fill both -expand 1
-pack .detail.bbb.x -side left
-pack .detail.bbb -side bottom -fill x
+pack .detail.ubb -side top -fill x
+pack .detail.lbb.x -side left
+pack .detail.lbb -side bottom -fill x
 pack .detail -side right -fill both
 
 proc badconfig {msg} {
     puts stderr "Bad hard coded configuration: $msg"
-    .detail.m.none.l2 configure -text "Bad hard coded configuration"
-    .detail.m.none.l3 configure -text $msg
-    .detail.m.none.l4 configure -text ""
-    detail_select none
+    .detail.m.l2 configure -text "Bad hard coded configuration"
+    .detail.m.l3 configure -text $msg
+    .detail.m.l4 configure -text ""
     vwait forever
 }
 
@@ -287,10 +280,9 @@ proc badconfig {msg} {
 update
 if {[catch {load $sockptyr_library_path sockptyr} res]} {
     puts stderr "Failed to load sockptyr library from $sockptyr_library_path: $res"
-    .detail.m.none.l2 configure -text "sockptyr library not loaded"
-    .detail.m.none.l3 configure -text "error: $res"
-    .detail.m.none.l4 configure -text ""
-    detail_select none
+    .detail.m.l2 configure -text "sockptyr library not loaded"
+    .detail.m.l3 configure -text "error: $res"
+    .detail.m.l4 configure -text ""
     vwait forever
 }
 
@@ -300,6 +292,8 @@ array set sockptyr_info [sockptyr info]
 ## ## ## Connection handling
 
 # About how connection entries in .conns.can are tracked:
+#   $conn_cfgs($label) identifies the label used in $config(...) for this
+#       and possibly other connections
 #   $conn_hdls($label) maps the unique label string to a "sockptyr" handle
 #       or "" if it's not ok
 #   $conn_tags($label) maps the unique label string to a tag in .conns.can
@@ -331,7 +325,7 @@ set conn_tags() 0
 proc conn_add {label ok source he qual} {
     puts stderr [list conn_add label $label ok $ok source $source he $he qual $qual]
 
-    global conns conn_hdls conn_tags conn_desc conn_deact
+    global conns conn_cfgs conn_hdls conn_tags conn_desc conn_deact
     global conn_line1 conn_line2 conn_line3
     global listwidth config fgcolor bgcolor
 
@@ -389,6 +383,7 @@ proc conn_add {label ok source he qual} {
     } else {
         set conn_hdls($conn) ""
     }
+    set conn_cfgs($conn) $label
     set conn_line3($conn) ""
     set conn_deact($conn) ""
     switch -- $source {
@@ -471,6 +466,7 @@ proc conn_sel {conn} {
 
     global conn_sel bgcolor fgcolor conn_tags
     global conn_line1 conn_line2 conn_line3
+    global lbuttons
 
     if {$conn_sel ne ""} {
         # deselect the current one
@@ -479,26 +475,32 @@ proc conn_sel {conn} {
         .conns.can itemconfigure $tag.c -fill $fgcolor
     }
 
+    destroy .detail.ubb.if
     if {$conn eq ""} {
         # selecting nothing
-        .detail.m.none.l1 configure -text "No selection"
-        .detail.m.none.l2 configure -text ""
-        .detail.m.none.l3 configure -text ""
-        .detail.m.none.l4 configure -text ""
+        .detail.m.l1 configure -text "No selection"
+        .detail.m.l2 configure -text ""
+        .detail.m.l3 configure -text ""
+        .detail.m.l4 configure -text ""
     } else {
         # selecting a particular connection
         set tag $conn_tags($conn)
-        .detail.m.none.l1 configure -text $conn
-        .detail.m.none.l2 configure -text $conn_line1($conn)
-        .detail.m.none.l3 configure -text $conn_line2($conn)
-        .detail.m.none.l4 configure -text $conn_line3($conn)
+        .detail.m.l1 configure -text $conn
+        .detail.m.l2 configure -text $conn_line1($conn)
+        .detail.m.l3 configure -text $conn_line2($conn)
+        .detail.m.l4 configure -text $conn_line3($conn)
         .conns.can itemconfigure $tag.r -fill $fgcolor
         .conns.can itemconfigure $tag.c -fill $bgcolor
+        frame .detail.ubb.if
+        pack .detail.ubb.if -expand 1 -fill both
+        # XXX add buttons for any available operations plus close
     }
 
     set conn_sel $conn
 }
 conn_sel ""
+
+# XXX add onclose & onerror handling
 
 # conn_del: Remove a connection from the connection list.
 # XXX use & test this
@@ -522,7 +524,7 @@ proc conn_del {conn} {
     }
 
     # remove from the GUI list of connections and from the various arrays
-    global conn_hdls conn_tags conn_deact
+    global conn_hdls conn_cfgs conn_tags conn_deact
     global conn_line1 conn_line2 conn_line3
 
     .conns.can delete $conn_tags($conn)
@@ -538,6 +540,7 @@ proc conn_del {conn} {
         sockptyr close $conn_hdls($conn)
     }
     unset conn_hdls($conn)
+    unset conn_cfgs($conn)
 
     # redraw the GUI list of connections
     
@@ -638,7 +641,8 @@ proc periodic {ms cmd} {
 # Go through $config(...) to identify labels, and under each label, buttons.
 # Ends up building:
 #       $labels -- list of labels
-#       $lbuttons($label) -- list of buttons per label
+#       $lbuttons($label) -- list of buttons per label (actions from the
+#           configuration)
 # and using arrays $_labels(...) and $_lbuttons(...) temporarily.
 array unset _labels
 array unset _lbuttons
