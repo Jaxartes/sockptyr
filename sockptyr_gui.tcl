@@ -125,7 +125,98 @@ set winheight 448
 set bgcolor lightgray
 set fgcolor black
 
+set aqua_fake_buttons 1
+
 ## ## ## GUI
+
+# Hack to deal with bug in macOS native interface "aque" in which the buttons
+# show up blank.  This just makes a fake "button" implementation out of a label.
+if {$aqua_fake_buttons && [tk windowingsystem] eq "aqua"} {
+    puts stderr "macOS aqua hack running"
+
+    set fake_btn_cfg(nfg) black     ; # normal foreground color
+    set fake_btn_cfg(nbg) white     ; # normal background color
+    set fake_btn_cfg(nre) raised    ; # normal relief
+    set fake_btn_cfg(afg) black     ; # actuated foreground color
+    set fake_btn_cfg(abg) white     ; # actuated background color
+    set fake_btn_cfg(are) sunken    ; # actuated relief
+    set fake_btn_cfg(bwd) 5         ; # border width
+    set fake_btn_cfg(fnt) lblfont   ; # font
+
+    proc button {bname args} {
+        global fake_btn_state fake_btn_cfg
+
+        set btext "?"
+        set bcommand [list puts stderr "Unhandled button press $bname"]
+        foreach {o v} $args {
+            switch -- $o {
+                "-text" {
+                    set btext $v
+                }
+                "-command" {
+                    set bcommand $v
+                }
+                default {
+                    puts stderr "Unknown option to fake button $bname: $o"
+                }
+            }
+        }
+
+        label $bname -text $btext \
+            -borderwidth $fake_btn_cfg(bwd) \
+            -font $fake_btn_cfg(fnt)
+        fake_btn_op $bname create $bcommand
+        bind $bname <ButtonPress> [list fake_btn_op $bname press $bcommand]
+        bind $bname <ButtonRelease> [list fake_btn_op $bname release $bcommand]
+        bind $bname <Leave> [list fake_btn_op $bname leave $bcommand]
+
+        # If this were to become a more general "fake button" implementation,
+        # might want:
+        #       more configurable options
+        #       global command $bname to do flash / configure / invoke
+        #       override "destroy" to remove fake_btn_state array entry
+    }
+
+    proc fake_btn_op {bname op bcommand} {
+        global fake_btn_state fake_btn_cfg
+
+        set doit 0
+
+        switch -- $op {
+            create {
+                set fake_btn_state($bname) 0
+            }
+            press {
+                set fake_btn_state($bname) 1
+            }
+            release {
+                if {$fake_btn_state($bname)} {  
+                    set doit 1
+                }
+                set fake_btn_state($bname) 0
+            }
+            leave {
+                set fake_btn_state($bname) 0
+            }
+        }
+
+        if {$fake_btn_state($bname)} {
+            $bname configure \
+                -foreground $fake_btn_cfg(afg) \
+                -background $fake_btn_cfg(abg) \
+                -relief $fake_btn_cfg(are)
+        } else {
+            $bname configure \
+                -foreground $fake_btn_cfg(nfg) \
+                -background $fake_btn_cfg(nbg) \
+                -relief $fake_btn_cfg(nre)
+        }
+
+        if {$doit} {
+            uplevel "#0" $bcommand
+        }
+    }
+}
 
 wm iconname . "sockptyr"
 wm title . "sockptyr"
@@ -178,15 +269,6 @@ pack .detail.m -side top -fill both -expand 1
 pack .detail.bbb.x -side left
 pack .detail.bbb -side bottom -fill x
 pack .detail -side right -fill both
-
-# Make the buttons appear properly on macOS native interface.
-if {[tk windowingsystem] eq "aqua"} {
-    puts stderr "macOS (non-X11) hack running"
-    update
-    .detail.bbb.x configure -width 5 -height 1 -borderwidth 1
-    update
-    # XXX doesn't work anyway; nothing I've tried has
-}
 
 proc badconfig {msg} {
     puts stderr "Bad hard coded configuration: $msg"
