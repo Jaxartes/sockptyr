@@ -72,7 +72,6 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 #                   XXX code it
 #               conn_action_close $cfglbl $fulllbl
 #                   Close the connection and get rid of it.
-#                   XXX code it
 
 set config(LISTY:source) {listen ./sockptyr_test_env_l}
 set config(LISTY:button:0:text) Terminal
@@ -576,11 +575,14 @@ proc conn_del {conn} {
     unset conn_line1($conn)
     unset conn_line2($conn)
     unset conn_line3($conn)
-    if {$conn_deact ne ""} {
-        eval $conn_deact
+    if {$conn_deact($conn) ne ""} {
+        eval $conn_deact($conn)
     }
     unset conn_deact($conn)
     if {$conn_hdls($conn) ne ""} {
+        # close the connection, it isn't already
+        sockptyr onclose $conn_hdls($conn)
+        sockptyr onerror $conn_hdls($conn)
         sockptyr close $conn_hdls($conn)
     }
     unset conn_hdls($conn)
@@ -589,6 +591,15 @@ proc conn_del {conn} {
     # redraw the GUI list of connections
     
     conn_pos
+}
+
+# conn_action_close: Handle the GUI "close" button on a connection, to close
+# it and remove it from the list.
+#       $cfg = configuration label for the connection
+#       $conn = full label for the connection
+proc conn_action_close {cfg conn} {
+    puts stderr [list conn_action_close $cfg $conn]
+    conn_del $conn
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
