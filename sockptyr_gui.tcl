@@ -69,7 +69,6 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 #                   XXX code it
 #               conn_action_loopback $cfglbl $fulllbl
 #                   Hook the connection up to itself (loopback).
-#                   XXX code it
 #               conn_action_close $cfglbl $fulllbl
 #                   Close the connection and get rid of it.
 
@@ -576,7 +575,7 @@ proc conn_del {conn} {
     unset conn_line2($conn)
     unset conn_line3($conn)
     if {$conn_deact($conn) ne ""} {
-        eval $conn_deact($conn)
+        uplevel "#0" $conn_deact($conn)
     }
     unset conn_deact($conn)
     if {$conn_hdls($conn) ne ""} {
@@ -600,6 +599,26 @@ proc conn_del {conn} {
 proc conn_action_close {cfg conn} {
     puts stderr [list conn_action_close $cfg $conn]
     conn_del $conn
+}
+
+# conn_action_loopback: Handle the GUI "loopback" button on a connection,
+# to hook it up to itself.
+#       $cfg = configuration label for the connection
+#       $conn = full label for the connection
+proc conn_action_loopback {cfg conn} {
+    puts stderr [list conn_action_loopback $cfg $conn]
+    global conn_deact conn_hdls
+    if {$conn_deact($conn) ne ""} {
+        # undo whatever was done before
+        uplevel "#0" $conn_deact($conn)
+        set conn_deact($conn) ""
+    }
+    if {$conn_hdls($conn) eq ""} {
+        error "cannot do loopback on a connection that's closed"
+    }
+    sockptyr link $conn_hdls($conn) $conn_hdls($conn)
+    set conn_deact($conn) [list sockptyr link $conn_hdls($conn)]
+    # XXX add indicator of what's been done to connection
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
