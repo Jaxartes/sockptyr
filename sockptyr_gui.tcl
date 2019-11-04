@@ -139,8 +139,10 @@ set winheight 448
 
 # bgcolor - background color
 # fgcolor - foreground color
-set bgcolor lightgray
-set fgcolor black
+# bgcolor2 - slightly highlighted background color
+set bgcolor     "#d9d9d9"
+set bgcolor2    "#bababa"
+set fgcolor     "#000000"
 
 set aqua_fake_buttons 1
 
@@ -322,6 +324,7 @@ array set sockptyr_info [sockptyr info]
 #   $conn_deact($label) is code to run to cancel whatever action had been
 #                       done on the connection, like when closing it
 #                       or performing a contrary action
+#   $conn_lord($label) is its position in the list (0, 1, 2, etc)
 #   $conns lists the connections by unique label in order
 # Some related tracking:
 #   $listen_counter($label) is a counter to identify the connections
@@ -444,7 +447,7 @@ proc conn_add {label ok source he qual} {
     # Register handlers for things happening on the connection
     if {$conn_hdls($conn) ne ""} {
         sockptyr onclose $conn_hdls($conn) [list conn_onclose $conn]
-        sockptyr onerror $conn_hdls($conn) [list XXX conn_onerror]
+        sockptyr onerror $conn_hdls($conn) [list conn_onerror $conn]
     }
 
     # Create UI elements in .conns.can; positioned later.
@@ -476,16 +479,25 @@ proc conn_add {label ok source he qual} {
 # conn_pos: Go through the connection list after it has changed, to
 # reposition all connections.
 proc conn_pos {} {
-    global conns conn_tags listwidth
+    global conns conn_tags listwidth bgcolor bgcolor2 conn_lord
 
     set y 0
+    set i 0
     foreach conn $conns {
-        lassign [.conns.can bbox $conn_tags($conn).c] obx1 oby1 obx2 oby2
-        .conns.can move $conn_tags($conn) 0 [expr {$y - $oby1}]
-        lassign [.conns.can bbox $conn_tags($conn).c] nbx1 nby1 nbx2 nby2
+        set tag $conn_tags($conn)
+        lassign [.conns.can bbox $tag.c] obx1 oby1 obx2 oby2
+        .conns.can move $tag 0 [expr {$y - $oby1}]
+        lassign [.conns.can bbox $tag.c] nbx1 nby1 nbx2 nby2
+        .conns.can coords $tag.r 0 $nby1 $listwidth $nby2
+        set conn_lord($conn) $i
+        .conns.can itemconfigure $tag.r \
+            -fill [expr {($conn_lord($conn) & 1) ? $bgcolor2 : $bgcolor}]
         set y [expr {$y + $nby2 - $nby1}]
-        .conns.can coords $conn_tags($conn).r 0 $nby1 $listwidth $nby2
+        incr i
     }
+
+    # and adjust the scrollbar
+    .conns.can configure -scrollregion [list 0 0 $listwidth $y]
 }
 
 # conn_sel: Called to select a connection from the connection list.
@@ -495,13 +507,14 @@ set conn_sel ""
 proc conn_sel {conn} {
     puts stderr [list conn_sel $conn]
 
-    global conn_sel bgcolor fgcolor conn_tags
-    global conn_line1 conn_line2 conn_line3
+    global conn_sel bgcolor fgcolor conn_tags conn_lord
+    global conn_line1 conn_line2 conn_line3 bgcolor bgcolor2
 
     if {$conn_sel ne ""} {
         # deselect the current one
         set tag $conn_tags($conn_sel)
-        .conns.can itemconfigure $tag.r -fill $bgcolor
+        .conns.can itemconfigure $tag.r \
+            -fill [expr {($conn_lord($conn_sel) & 1) ? $bgcolor2 : $bgcolor}]
         .conns.can itemconfigure $tag.c -fill $fgcolor
     }
 
@@ -576,7 +589,7 @@ proc conn_del {conn} {
 
     # remove from the GUI list of connections and from the various arrays
     global conn_hdls conn_cfgs conn_tags conn_deact
-    global conn_line1 conn_line2 conn_line3
+    global conn_line1 conn_line2 conn_line3 conn_lord
 
     .conns.can delete $conn_tags($conn)
     unset conn_tags($conn)
@@ -595,6 +608,7 @@ proc conn_del {conn} {
     }
     unset conn_hdls($conn)
     unset conn_cfgs($conn)
+    unset conn_lord($conn)
 
     # redraw the GUI list of connections
     
@@ -661,6 +675,18 @@ proc conn_onclose {conn} {
     }
 
     conn_record_status $conn "Closed" "C"
+}
+
+# conn_onerror: Run when an error happens on a connection.
+#       $conn = full label for the connection
+#       $ekw = error keyword, see sockptyr-tcl-api.txt
+#       $emsg = textual error message
+proc conn_onerror {conn ekw emsg} {
+    puts stderr [list conn_onerror $conn $ekw $emsg]
+
+    # And that's all we do, display the message on the terminal.  If we
+    # wanted to be fancy we could display it in the GUI.  It doesn't
+    # seem worth it at the moment.
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
