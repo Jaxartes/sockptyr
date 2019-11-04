@@ -490,7 +490,6 @@ proc conn_sel {conn} {
 
     global conn_sel bgcolor fgcolor conn_tags
     global conn_line1 conn_line2 conn_line3
-    global lbuttons
 
     if {$conn_sel ne ""} {
         # deselect the current one
@@ -665,23 +664,14 @@ proc periodic {ms cmd} {
 # Go through $config(...) to identify labels, and under each label, buttons.
 # Ends up building:
 #       $labels -- list of labels
-#       $lbuttons($label) -- list of buttons per label (actions from the
-#           configuration)
-# and using arrays $_labels(...) and $_lbuttons(...) temporarily.
+# and using array $_labels(...) temporarily.
 array unset _labels
-array unset _lbuttons
-array unset lbuttons
 set labels [list]
 foreach k [array names config] {
     lassign [split $k ":"] label lfield button bfield
     if {![info exists _labels($label)]} {
         lappend labels $label
         set _labels($label) 1
-        set lbuttons($label) [list]
-    }
-    if {$lfield eq "button" && ![info exists _lbuttons($label:$button)]} {
-        lappend lbuttons($label) $button
-        set _lbuttons($label:$button) 1
     }
 }
 
