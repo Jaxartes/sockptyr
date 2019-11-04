@@ -40,41 +40,65 @@ set sockptyr_library_path ./sockptyr[info sharedlibextension]
 #               If "inotify" is available it uses that to monitor the
 #               directory.  Otherwise it reads the directory every
 #               $interval seconds.
-#       set config($label:action:$text:icon) ...
-#           Define something the user can do with any connection from
-#           this source.  The value is the name of an image defined
-#           within this program for use as a graphical indicator.  The $text
-#           is a text string to go with it.
+#       set config($label:button:$num:...)
+#           Configuration for buttons on the connection from this source.
+#           The buttons are numbered 0, 1, etc.  See below for details
+#           to be included.
 #
 #           There should be at least two buttons, one to use the connection
 #           somehow and one to close it.  Perhaps more.
-#           XXX change the actions to be numbered so they have an order
-#       set config($label:action:$text:ptyrun) ...
-#           When the button is activated, open a PTY and then execute
-#           the specified program.  It's a shell command with limited
-#           "%" substitution:
-#               %% - "%"
-#               %l - full label
-#               %p - PTY pathname
-#       set config($label:action:$text:loopback) ...
-#           When the button is activated, link the connection to itself
-#           (loopback).
+#       set config($label:button:$num:text) ...
+#           Text to show on the button
+#       set config($label:button:$num:icon) ...
+#           Image to show on this button -- name of one defined in this
+#           program.
+#       set config($label:button:$num:always) ...
+#           Flag indicating this button is always applicable even when the
+#           connection has been disconnected.  1 is true, 0 or absence is
+#           false.
+#       set config($label:button:$num:action) ...
+#           Tcl list defining action to perform for this button.
+#           It's a partial Tcl command to which the following will be
+#           appended:
+#               config label
+#               full label
+#           Pre-coded commands:
+#               conn_action_ptyrun $cmd $cfglbl $fulllbl
+#                   Open a PTY and execute the specified program $cmd,
+#                   a shell command with limited "%" substitution:
+#                       %% - "%"
+#                       %l - full label
+#                       %p - PTY pathname
+#                   XXX code it
+#               conn_action_loopback $cfglbl $fulllbl
+#                   Hook the connection up to itself (loopback).
+#                   XXX code it
+#               conn_action_close $cfglbl $fulllbl
+#                   Close the connection and get rid of it.
+#                   XXX code it
 
 set config(LISTY:source) {listen ./sockptyr_test_env_l}
-set config(LISTY:action:Terminal:icon) ico_term
-set config(LISTY:action:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
-set config(LISTY:action:Loopback:icon) ico_back
-set config(LISTY:action:Loopback:loopback) 1
+set config(LISTY:button:0:text) Terminal
+set config(LISTY:button:0:icon) ico_term
+set config(LISTY:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}}
+set config(LISTY:button:1:text) Loopback
+set config(LISTY:button:1:icon) ico_back
+set config(LISTY:button:1:action) conn_action_loopback
+set config(LISTY:button:2:text) Close
+#set config(LISTY:button:2:icon) XXX
+set config(LISTY:button:2:action) conn_action_close
+set config(LISTY:button:2:always) 1
 set config(CONN:source) {connect ./sockptyr_test_env_c}
-set config(CONN:action:Terminal:icon) ico_term
-set config(CONN:action:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
-set config(CONN:action:Loopback:icon) ico_back
-set config(CONN:action:Loopback:loopback) 1
-set config(DIR:source) {directory ./sockptyr_test_env_d 20.0}
-set config(DIR:action:Terminal:icon) ico_term
-set config(DIR:action:Terminal:ptyrun) {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}
-set config(DIR:action:Loopback:icon) ico_back
-set config(DIR:action:Loopback:loopback) 1
+set config(CONN:button:0:text) Terminal
+set config(CONN:button:0:icon) ico_term
+set config(CONN:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p}}
+set config(CONN:button:1:text) Loopback
+set config(CONN:button:1:icon) ico_back
+set config(CONN:button:1:action) conn_action_loopback
+set config(CONN:button:2:text) Close
+#set config(CONN:button:2:icon) XXX
+set config(CONN:button:2:action) conn_action_close
+set config(CONN:button:2:always) 1
 
 ## ## ## GUI setup details, like where to find pictures
 
