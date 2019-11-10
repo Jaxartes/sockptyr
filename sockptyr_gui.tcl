@@ -8,8 +8,6 @@ exec /usr/bin/wish "$0" ${1+"$@"}
 # want to hook up to, and gives you buttons for, e.g. starting terminal
 # windows hooked up to them.
 
-# XXX work in progress
-
 ## ## ## Hard coded configuration
 
 # Some of this information would ideally be moved to a configuration file,
@@ -576,9 +574,16 @@ conn_sel ""
 proc conn_del {conn} {
     puts stderr [list conn_del $conn]
 
-    global conns conn_sel
+    global conns conn_sel conn_deact
+    global conn_hdls conn_cfgs conn_tags
+    global conn_line1 conn_line2 conn_line3 conn_lord
 
     if {$conn eq ""} return ; # shouldn't happen
+
+    if {$conn_deact($conn) ne ""} {
+        uplevel "#0" $conn_deact($conn)
+        set conn_deact($conn) ""
+    }
 
     if {$conn_sel eq $conn} {
         # This connection was selected; deselect it.
@@ -593,17 +598,12 @@ proc conn_del {conn} {
     }
 
     # remove from the GUI list of connections and from the various arrays
-    global conn_hdls conn_cfgs conn_tags conn_deact
-    global conn_line1 conn_line2 conn_line3 conn_lord
 
     .conns.can delete $conn_tags($conn)
     unset conn_tags($conn)
     unset conn_line1($conn)
     unset conn_line2($conn)
     unset conn_line3($conn)
-    if {$conn_deact($conn) ne ""} {
-        uplevel "#0" $conn_deact($conn)
-    }
     unset conn_deact($conn)
     if {$conn_hdls($conn) ne ""} {
         # close the connection, it isn't already
@@ -804,13 +804,15 @@ proc conn_onerror {conn sub ekws emsg} {
 proc ptyrun_byebye {conn pty_hdl} {
     puts stderr [list ptyrun_byebye $conn $pty_hdl]
 
-    global conn_hdls
+    global conn_hdls conn_deact
 
+    set conn_deact($conn) ""
+    sockptyr onclose $pty_hdl
     sockptyr link $conn_hdls($conn)
     sockptyr close $pty_hdl
     conn_record_status $conn "" ""
 
-    # XXX this doesn't actually close the terminal; nor detect its closing
+    # XXX this doesn't actually close the terminal
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
