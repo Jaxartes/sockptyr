@@ -811,8 +811,6 @@ proc ptyrun_byebye {conn pty_hdl} {
     sockptyr link $conn_hdls($conn)
     sockptyr close $pty_hdl
     conn_record_status $conn "" ""
-
-    # XXX this doesn't actually close the terminal
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
