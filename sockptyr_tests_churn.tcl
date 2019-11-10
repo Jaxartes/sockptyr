@@ -302,7 +302,11 @@ proc add {cyc} {
     puts stderr "Running shell command: $cmd"
     set got [sockptyr exec $cmd]
     puts stderr "Result: $got"
-    if {$got ne $exp} {
+    if {$got eq $exp} {
+        # ok
+    } elseif {$got eq "signal {Killed: 9}" && $exp eq "signal Killed"} {
+        # also ok
+    } else {
         error "Result not what was expected"
     }
     update
