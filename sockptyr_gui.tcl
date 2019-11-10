@@ -726,7 +726,7 @@ proc conn_action_ptyrun {cmd statlong statshort cfg conn} {
 
     # Execute that command
     puts stderr [list about to execute: $cmd2]
-    exec sh -c $cmd2 </dev/null >@stdout 2>@stderr
+    puts stderr [list result: [sockptyr exec $cmd2]]
 
     # Linkage, status, tracking, and cleanup
     sockptyr link $conn_hdls($conn) $pty_hdl

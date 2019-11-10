@@ -35,6 +35,23 @@ Commands:
         Returns a handle for the connection.  This handle can be passed
         to sockptyr link, etc.
 
+    sockptyr exec $command
+        Execute $command in the shell & wait for it to complete.
+        (If you don't want to wait, append "&" to $command.)
+        Similar in basic purpose to Tcl's "exec" command but with a
+        bunch of differences that are helpful to "sockptyr"'s GUI:
+            + It handles file descriptors differently: It redirects
+            stdin from /dev/null, leaves stdout & stderr untouched,
+            and closes any other file descriptors.
+            + It runs the shell, passing a single string command to it.
+            + It returns the result as follows:
+                "exit $st"
+                    if the command exited normally with status $st
+                "signal $sig"
+                    if the command was terminated by signal $sig;
+                    $core is a boolean indicating a core dump happened.
+                    $sig is a descriptive string not a signal number
+
     sockptyr info
         Returns information about the "sockptyr" software.  The result
         is name value pairs in a list of the form "name value name value ...".

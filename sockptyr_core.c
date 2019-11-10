@@ -30,11 +30,15 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <tcl.h>
 #if USE_INOTIFY
 #include <sys/inotify.h>
 #endif /* USE_INOTIFY */
+#include <sys/types.h>
+#include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <sys/un.h>
 
 static const char *handle_prefix = "sockptyr_";
@@ -131,9 +135,6 @@ struct sockptyr_hdl {
 #if USE_INOTIFY
         usage_inot, /* something monitored with "sockptyr inotify" */
 #endif /* USE_INOTIFY */
-        usage_exec, /* program started by "sockptyr exec" if I ever
-                     * decide to implement it
-                     */
         usage_lstn, /* a listen() socket created with "sockptyr listen" */
     } usage;
 
@@ -213,6 +214,8 @@ static int sockptyr_cmd_inotify(ClientData cd, Tcl_Interp *interp,
 #endif /* USE_INOTIFY */
 static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
                               int argc, const char *argv[]);
+static int sockptyr_cmd_exec(ClientData cd, Tcl_Interp *interp,
+                             int argc, const char *argv[]);
 static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int dofree);
 static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
 static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
@@ -288,6 +291,8 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
         return(sockptyr_cmd_close(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "buffer_size")) {
         return(sockptyr_cmd_buffer_size(cd, interp, argc - 2, argv + 2));
+    } else if (!strcmp(argv[1], "exec")) {
+        return(sockptyr_cmd_exec(cd, interp, argc - 2, argv + 2));
     } else if (!strcmp(argv[1], "info")) {
         return(sockptyr_cmd_info(cd, interp, argc - 2, argv + 2));
 #if USE_INOTIFY
@@ -862,7 +867,6 @@ static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
 #if USE_INOTIFY
     case usage_inot:    Tcl_AppendElement(interp, "inot"); break;
 #endif
-    case usage_exec:    Tcl_AppendElement(interp, "exec"); break;
     case usage_lstn:    Tcl_AppendElement(interp, "lstn"); break;
     default:
         if (!err[0]) {
@@ -934,9 +938,6 @@ static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
         Tcl_AppendElement(interp, Tcl_GetString(hdl->u.u_inot.proc));
         break;
 #endif /* USE_INOTIFY */
-    case usage_exec:
-        /* nothing to do (yet?) */
-        break;
     case usage_lstn:
         snprintf(buf, sizeof(buf), "%d sok", (int)hdl->num);
         Tcl_AppendElement(interp, buf);
@@ -1203,6 +1204,71 @@ static int sockptyr_cmd_buffer_size(ClientData cd, Tcl_Interp *interp,
     }
     sd->buf_sz = bytes;
     return(TCL_OK);
+}
+
+/* Tcl command "sockptyr exec $command" -- Execute $command in the shell
+ * and wait for it to complete.  Returns information about its result.
+ * See sockptyr-tcl-api.txt for further discussion.
+ */
+static int sockptyr_cmd_exec(ClientData cd, Tcl_Interp *interp,
+                             int argc, const char *argv[])
+{
+    pid_t child;
+    int wstatus, fd;
+
+    if (argc != 1) {
+        Tcl_SetResult(interp, "usage: sockptyr exec $command", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    /* new process */
+    child = fork();
+
+    /* which one are we now? */
+    if (child < 0) {
+        /* fork() failed; uncommon */
+        Tcl_SetObjResult(interp,
+                         Tcl_ObjPrintf("fork failed: %s",
+                                       strerror(errno)));
+        return(TCL_ERROR);
+    } else if (child > 0) {
+        /* parent process */
+        /* wait for child to end */
+        wstatus = 0;
+        while (waitpid(child, &wstatus, 0) < 0)
+            ;
+        /* return an indication of its result */
+        if (WIFEXITED(wstatus)) {
+            Tcl_SetObjResult(interp,
+                             Tcl_ObjPrintf("exit %d",
+                                           (int)WEXITSTATUS(wstatus)));
+        } else if (WIFSIGNALED(wstatus)) {
+            Tcl_SetResult(interp, "signal", TCL_STATIC);
+            Tcl_AppendElement(interp, strsignal(WTERMSIG(wstatus)));
+        } else {
+            Tcl_SetResult(interp, "unknown-termination", TCL_STATIC);
+        }
+        return(TCL_OK);
+    } else {
+        /* child process */
+        /* redirect stdin from /dev/null */
+        fd = open("/dev/null", O_RDONLY);
+        dup2(STDIN_FILENO, fd);
+
+        /* close file descriptors other than stdin/stderr/stdout */
+        for (fd = 3; fd < FD_SETSIZE; ++fd) {
+            close(fd);
+        }
+
+        /* run $command via the shell */
+        execl("/bin/sh", "sh", "-c", argv[argc - 1], NULL);
+
+        /* execl() should never return, if it does it indicates a serious
+         * problem
+         */
+        fprintf(stderr, "Unable to run shell?!\n");
+        _exit(1);
+    }
 }
 
 /* sockptyr_register_conn_handler(): For the given handle (which is

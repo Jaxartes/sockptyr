@@ -274,6 +274,38 @@ proc add {cyc} {
         puts stderr "Triggered and checked inotify watch"
         if {$hdalways} { hderrorcheck }
     }
+
+    # run a command in a shell
+    switch -- [expr {int(rand()*8)}] {
+        0 -
+        1 -
+        2 {
+            set cmd "exit 0"
+            set exp "exit 0"
+        }
+        3 -
+        4 {
+            set cmd "exit 1"
+            set exp "exit 1"
+        }
+        5 -
+        6 {
+            set sec [expr {(rand() < 0.01) ? 300 : 3}]
+            set cmd "sleep $sec &"
+            set exp "exit 0"
+        }
+        7 {
+            set cmd "kill -9 $$"
+            set exp "signal Killed"
+        }
+    }
+    puts stderr "Running shell command: $cmd"
+    set got [sockptyr exec $cmd]
+    puts stderr "Result: $got"
+    if {$got ne $exp} {
+        error "Result not what was expected"
+    }
+    update
 }
 
 # single "del" subcycle operation
