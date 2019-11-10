@@ -170,6 +170,8 @@ struct sockptyr_data {
 #endif /* USE_INOTIFY */
 };
 
+static char *sockptyr_errkws_bug[] = { "bug", NULL };
+
 static struct sockptyr_hdl *sockptyr_allocate_handle(struct sockptyr_data *sd);
 static struct sockptyr_hdl *sockptyr_lookup_handle(struct sockptyr_data *sd,
                                                    const char *hdls);
@@ -217,7 +219,9 @@ static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
 static void sockptyr_conn_handler(ClientData cd, int mask);
 static void sockptyr_lstn_handler(ClientData cd, int mask);
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
-                                char *errkw, char *errstr);
+                                char **errkws, char *errstr);
+static void sockptyr_conn_event_sys(struct sockptyr_hdl *hdl,
+                                    int e, int blocking);
 static void sockptyr_lst_insert(struct sockptyr_hdl **head,
                                 struct sockptyr_hdl *hdl);
 static void sockptyr_lst_remove(struct sockptyr_hdl **head,
@@ -579,7 +583,7 @@ static int sockptyr_cmd_onclose(ClientData cd, Tcl_Interp *interp,
 /* Tcl "sockptyr onerror $hdl $proc": When an error occurs on $hdl
  * in the background, invoke Tcl script $proc with two list items appended
  * describing the exception:
- *      keyword loosely identifying the kind of error
+ *      list of keywords giving info about the error
  *      printable message like from strerror()
  * Leave out $proc to cancel it.
  */
@@ -1253,7 +1257,8 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             (int)hdl->num, (int)mask);
 #endif
     if (conn->fd < 0) {
-        sockptyr_conn_event(hdl, "bug", "event on closed file descriptor");
+        sockptyr_conn_event(hdl, sockptyr_errkws_bug,
+                            "event on closed file descriptor");
     }
 
     /* see about receiving on this connection, into its buffer */
@@ -1280,10 +1285,7 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             if (errno == EINTR) {
                 /* not really an error, just let it slide */
             } else {
-                sockptyr_conn_event(hdl,
-                                    (errno == EAGAIN || errno == EWOULDBLOCK) ?
-                                    "bug" : /* got these on blocking socket? */
-                                    "io", strerror(errno));
+                sockptyr_conn_event_sys(hdl, errno, 1);
             }
         } else if (rv == 0) {
             /* connection closed */
@@ -1327,14 +1329,11 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             if (errno == EINTR) {
                 /* not really an error, just let it slide */
             } else {
-                sockptyr_conn_event(hdl,
-                                    (errno == EAGAIN || errno == EWOULDBLOCK) ?
-                                    "bug" : /* got these on blocking socket? */
-                                    "io", strerror(errno));
+                sockptyr_conn_event_sys(hdl, errno, 1);
             }
         } else if (rv == 0) {
             /* shouldn't have happened */
-            sockptyr_conn_event(hdl, "bug", "zero length write");
+            sockptyr_conn_event(hdl, sockptyr_errkws_bug, "zero length write");
         } else {
             lconn->buf_out += rv;
             if (lconn->buf_out == lconn->buf_sz) {
@@ -1567,23 +1566,24 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
 
 /* sockptyr_conn_event() -- handle something happening on a connection,
  * like an error or it being closed, by calling the registered Tcl handler.
- * If it's just closure, 'errkw' and 'errstr' should be NULL.  If it's
+ * If it's just closure, 'errkws' and 'errstr' should be NULL.  If it's
  * an error they should be filled in.
  *
  * 'hdl' is assumed to be a connection, not one of the other things.
  */
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
-                                char *errkw, char *errstr)
+                                char **errkws, char *errstr)
 {
     struct sockptyr_conn *conn = &(hdl->u.u_conn);
     struct sockptyr_data *sd = hdl->sd;
     Tcl_Interp *interp = sd->interp;
-    Tcl_Obj *cmd;
+    Tcl_Obj *cmd, *es;
 #if USE_TCL_BACKGROUNDEXCEPTION
     int result;
 #endif
+    int i;
 
-    if (errkw == NULL) {
+    if (errkws == NULL) {
         if (conn->onclose == NULL) return; /* no handler */
 
         cmd = Tcl_NewStringObj(conn->onclose, strlen(conn->onclose));
@@ -1592,10 +1592,14 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
         if (conn->onerror == NULL) return; /* no handler */
 
         cmd = Tcl_NewStringObj(conn->onerror, strlen(conn->onerror));
-        if (errkw == NULL) errkw = "";
+        es = Tcl_NewListObj(0, NULL);
+        for (i = 0; errkws && errkws[i]; ++i) {
+            Tcl_ListObjAppendElement(interp, es,
+                                     Tcl_NewStringObj(errkws[i],
+                                                      strlen(errkws[i])));
+        }
         if (errstr == NULL) errstr = "";
-        Tcl_ListObjAppendElement(interp, cmd,
-                                 Tcl_NewStringObj(errkw, strlen(errkw)));
+        Tcl_ListObjAppendElement(interp, cmd, es);
         Tcl_ListObjAppendElement(interp, cmd,
                                  Tcl_NewStringObj(errstr, strlen(errstr)));
         Tcl_IncrRefCount(cmd);
@@ -1613,6 +1617,48 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
 #endif
     Tcl_Release(interp);
     Tcl_DecrRefCount(cmd);
+}
+
+/* sockptyr_conn_event_sys() -- wrapper around sockptyr_conn_event() for
+ * errors that come from system calls & set errno.
+ *
+ * Parameters:
+ *      hdl -- a connection handle
+ *      e -- error number (e.g. EIO) usually copied from errno
+ *      blocking -- is this supposed to be a blocking socket/file?
+ */
+static void sockptyr_conn_event_sys(struct sockptyr_hdl *hdl,
+                                    int e, int blocking)
+{
+    if (blocking && (e == EAGAIN || e == EWOULDBLOCK)) {
+        /* shouldn't be getting these errors on our blocking socket */
+        sockptyr_conn_event(hdl, sockptyr_errkws_bug,
+                            "blocking error on blocking socket");
+    } else {
+        char *errkws[3];
+        int ei;
+        ei = 0;
+        errkws[ei++] = "io";
+        switch (e) {
+            case EIO:
+                errkws[ei++] = "EIO";
+                break;
+            case EPIPE:
+                errkws[ei++] = "EPIPE";
+                break;
+            case ECONNRESET:
+                errkws[ei++] = "ECONNRESET";
+                break;
+            case ESHUTDOWN:
+                errkws[ei++] = "ESHUTDOWN";
+                break;
+            default:
+                /* nothing */
+                break;
+        }
+        errkws[ei] = NULL;
+        sockptyr_conn_event(hdl, errkws, strerror(e));
+    }
 }
 
 #if USE_INOTIFY

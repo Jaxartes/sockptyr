@@ -447,7 +447,7 @@ proc conn_add {label ok source he qual} {
     # Register handlers for things happening on the connection
     if {$conn_hdls($conn) ne ""} {
         sockptyr onclose $conn_hdls($conn) [list conn_onclose $conn]
-        sockptyr onerror $conn_hdls($conn) [list conn_onerror $conn]
+        sockptyr onerror $conn_hdls($conn) [list conn_onerror $conn c]
     }
 
     # Create UI elements in .conns.can; positioned later.
@@ -732,8 +732,8 @@ proc conn_action_ptyrun {cmd statlong statshort cfg conn} {
     sockptyr link $conn_hdls($conn) $pty_hdl
     conn_record_status $conn "$statlong ($pty_path)" $statshort
     set conn_deact($conn) [list ptyrun_byebye $conn $pty_hdl]
-    sockptyr onclose $conn_hdls($conn) [list ptyrun_byebye $conn $pty_hdl]
-    sockptyr onerror $conn_hdls($conn) [list conn_onerror PTY-${conn}]
+    sockptyr onclose $pty_hdl [list ptyrun_byebye $conn $pty_hdl]
+    sockptyr onerror $pty_hdl [list conn_onerror ${conn} p]
 }
 
 # conn_onclose: Run when a connection gets closed (and not by us).
@@ -741,7 +741,12 @@ proc conn_action_ptyrun {cmd statlong statshort cfg conn} {
 proc conn_onclose {conn} {
     puts stderr [list conn_onclose $conn]
 
-    global conn_hdls
+    global conn_hdls conn_deact
+
+    if {$conn_deact($conn) ne ""} {
+        uplevel "#0" $conn_deact($conn)
+        set conn_deact($conn) ""
+    }
 
     if {$conn_hdls($conn) ne ""} {
         # get rid of the connection handle
@@ -756,14 +761,40 @@ proc conn_onclose {conn} {
 
 # conn_onerror: Run when an error happens on a connection.
 #       $conn = full label for the connection
-#       $ekw = error keyword, see sockptyr-tcl-api.txt
+#       $sub = for connections that have more than one fd, indicate the one
+#       $ekws = error keywords, see sockptyr-tcl-api.txt
 #       $emsg = textual error message
-proc conn_onerror {conn ekw emsg} {
-    puts stderr [list conn_onerror $conn $ekw $emsg]
+# Could do something fancy, for now it doesn't even display the error
+# in the GUI, it just puts it on stderr.
+proc conn_onerror {conn sub ekws emsg} {
+    puts stderr [list conn_onerror $conn $sub $ekws $emsg]
 
-    # And that's all we do, display the message on the terminal.  If we
-    # wanted to be fancy we could display it in the GUI.  It doesn't
-    # seem worth it at the moment.
+    # see if some kind of disconnection is happening
+    set discon 0
+    foreach ekw $ekws {
+        switch $ekw {
+            "EIO" -
+            "EPIPE" -
+            "ECONNRESET" -
+            "ESHUTDOWN" { set discon 1 }
+        }
+    }
+
+    if {$discon} {
+        if {$sub eq "c"} {
+            # close the connection itself
+            conn_onclose $conn
+        } else {
+            # cancel whatever it was doing
+            global conn_deact
+
+            if {$conn_deact($conn) ne ""} {
+                uplevel "#0" $conn_deact($conn)
+                set conn_deact($conn) ""
+            }
+        }
+    }
+    # XXX if an error comes in fast the GUI won't update
 }
 
 # ptyrun_byebye: Run when a connection set up with "conn_action_ptyrun"

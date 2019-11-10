@@ -113,7 +113,7 @@ Commands:
 
         The onerror handler is executed with two list items appended to
         it as follows:
-            keyword loosely identifying the kind of error
+            list of zero or more keywords giving info about the error
             printable message like from strerror()
         In common usage $proc will be a Tcl procedure name and some of its
         parameters.
@@ -122,7 +122,8 @@ Commands:
             bug -- errors that really shouldn't happen and may indicate
                 a bug somewhere in the code
             io -- an I/O request made to the kernel resulted in an error.
-                Note that this is not the same as "I/O Error" (EIO)
+                Note that this is not the same as "Input/Output Error" (EIO)
+            EIO, EPIPE, ECONNRESET, ESHUTDOWN -- errno codes
 
     sockptyr open_pty
         Allocates a PTY (pseudo-terminal).  Returns two things (in a list):
