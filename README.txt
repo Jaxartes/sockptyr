@@ -1,4 +1,4 @@
-README for "sockptyr"
+documentation for "sockptyr"
 23 Nov 2019
 
 "sockptyr" is a program that connects/accept connections to Unix domain
@@ -24,6 +24,15 @@ use:
     doing things like starting up a terminal window connected to it.
 alternate use:
     "sockptyr" includes a library of Tcl commands to perform its tasks
-    such as accepting connections, linking them together, etc.  It also
-    contains an interface to "inotify" on Linux.  See the document
-    "sockptyr-tcl-api.txt" for usage.
+    including handling Unix domain sockets, pseudo-terminals, and
+    (on Linux only) "inotify."  These can be used in your own programs
+    if you choose.  See the document "sockptyr-tcl-api.txt" for usage.
+license:
+    Freely redistributable under Berkeley license
+explanation of the name:
+    Pronounced "sock-puh-teer".  Named in reference to its handling
+    of sockets, pseudo-terminals (PTYs), and the word "puppeteer."
+future plans:
+    None really.  The biggest potential improvement I could see would be
+    having it take a real configuration file, or be configured through
+    a GUI, instead of the lame "edit the script" method used now.
