@@ -836,7 +836,8 @@ proc ptyrun_byebye {conn pty_hdl} {
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in
-# it that weren't seen in previous reads.
+# it that weren't seen in previous reads.  Used when "inotify" is not
+# available; also to start "inotify" if available.
 # Parameters:
 #   $path -- pathname to the directory
 #   $label -- source label from $config(...)
@@ -845,15 +846,18 @@ proc ptyrun_byebye {conn pty_hdl} {
 # for each socket seen last time on processing $label: the filename
 # and... something else, doesn't matter.
 proc read_and_connect_dir {path label} {
-    global _racd_seen
+    global _racd_seen config sockptyr_info
 
-    puts stderr [list read_and_connect_dir path $path label $label] ; # grot
+    # trace message
+    puts stderr [list read_and_connect_dir path $path label $label]
 
+    # bookkeeping for record of what we've already seen
     if {![info exists _racd_seen($label)]} {
         set _racd_seen($label) [list]
     }
     array set osockets $_racd_seen($label)
 
+    # read the directory
     foreach name [glob -directory $path -nocomplain -tails "*"] {
         set fullpath [file join $path $name]
         if {[string match ".*" $name]} {
@@ -874,8 +878,22 @@ proc read_and_connect_dir {path label} {
         }
     }
 
-    # and record what we saw, for comparison later
+    # bookkeeping for record of what we've already seen
     set _racd_seen($label) [array get nsockets]
+
+    # start inotify, if possible; otherwise just schedule to re-scan
+    # the directory a little later
+    if {$sockptyr_info(USE_INOTIFY)} {
+        set incmd [list read_and_connect_inotify $path $label]
+        if {[catch {sockptyr inotify $path IN_CREATE $incmd} msg]} {
+            puts stderr "sockptyr inontify $path failed: $msg"
+        } else {
+            return
+        }
+    }
+    lassign $config($label:source) source path pollint
+    after [expr {int(ceil($pollint * 1000.0))}] \
+        [list read_and_connect_dir $path $label]
 }
 
 # read_and_connect_inotify: Run when "inotify" notifies us of a directory
@@ -887,7 +905,7 @@ proc read_and_connect_dir {path label} {
 #   $cookie -- the API provides this to match related events together
 #   $name -- name of file if any
 proc read_and_connect_inotify {path label flags cookie name} {
-    puts stderr [list read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name] ; # grot
+    puts stderr [list read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name]
 
     if {[lsearch -glob -nocase $flags *IGNORE] >= 0} {
         puts stderr "$path is gone and will no longer be monitored."
@@ -916,12 +934,6 @@ proc read_and_connect_inotify {path label flags cookie name} {
             conn_add $label 1 directory $hdl $name
         }
     }
-}
-
-# periodic: Execute $cmd every $ms milliseconds (or perhaps a bit longer).
-proc periodic {ms cmd} {
-    after $ms [list periodic $ms $cmd]
-    uplevel "\#0" $cmd
 }
 
 ## ## ## Now set things running
@@ -966,20 +978,9 @@ foreach label [lsort $labels] {
         "directory" {
             lassign $config($label:source) source path pollint
 
-            # Monitor the directory to connect to its sockets.
-            if {$sockptyr_info(USE_INOTIFY)} {
-                # First find any sockets already in the directory.
-                read_and_connect_dir $path $label
-
-                # Use "inotify" to watch new ones.
-                sockptyr inotify $path IN_CREATE \
-                    [list read_and_connect_inotify $path $label]
-            } else {
-                # Schedule polling to happen, in which we read the directory
-                # every so often to see if anything was added.
-                periodic [expr {int(ceil($pollint * 1000.0))}] \
-                    [list read_and_connect_dir $path $label]
-            }
+            # Look what's in the directory, and prepare to continue
+            # monitoring it, either through periodic polling or through inotify.
+            read_and_connect_dir $path $label
         }
         default {
             badconfig "label '$label' unrecognized source '$source'"
