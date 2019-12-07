@@ -159,7 +159,7 @@ font create lblfont -family Times -size 18 -weight bold
 font create txtfont -family Times -size 12 -weight normal
 
 # listwidth - list of scrolling connections list
-set listwidth 192
+set listwidth 320
 
 # detwidth - list of detail display
 set detwidth 384
