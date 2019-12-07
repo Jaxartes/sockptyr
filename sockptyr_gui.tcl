@@ -110,6 +110,14 @@ set config(CONN:button:1:action) conn_action_loopback
 set config(CONN:button:2:text) Close
 set config(CONN:button:2:action) conn_action_close
 set config(CONN:button:2:always) 1
+set config(DIR:source) {directory ./sockptyr_test_env_d 20}
+set config(DIR:button:0:text) Terminal
+set config(DIR:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
+set config(DIR:button:1:text) Loopback
+set config(DIR:button:1:action) conn_action_loopback
+set config(DIR:button:2:text) Close
+set config(DIR:button:2:action) conn_action_close
+set config(DIR:button:2:always) 1
 
 ## ## ## GUI setup details, like where to find pictures
 
