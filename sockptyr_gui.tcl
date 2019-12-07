@@ -415,10 +415,11 @@ proc conn_add {label ok source he qual} {
     set conn $conn2
 
     # make sure that label is unique (and nonempty)
-    if {[info exists conn_tags($conn)] || $conn ne ""} {
+    if {[info exists conn_tags($conn)] || $conn eq ""} {
         for {set i 0} {1} {incr i} {
-            if {![info exists conn_tags($conn)]} {
-                append $conn [format .%lld $i]
+            set conn2 [format %s.%lld $conn $i]
+            if {![info exists conn_tags($conn2)]} {
+                set conn $conn2
                 break
             }
         }
