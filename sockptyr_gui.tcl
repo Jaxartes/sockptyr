@@ -193,7 +193,7 @@ if {$aqua_fake_buttons && [tk windowingsystem] eq "aqua"} {
     set fake_btn_cfg(fnt) lblfont   ; # font
 
     proc fake_btn {bname args} {
-        global fake_btn_state fake_btn_cfg
+        global fake_btn_state fake_btn_cfg fake_btn_cmd
 
         set btext "?"
         set bcommand [list puts stderr "Unhandled button press $bname"]
@@ -211,23 +211,24 @@ if {$aqua_fake_buttons && [tk windowingsystem] eq "aqua"} {
             }
         }
 
+        set fake_btn_cmd($bname) $bcommand
         label $bname -text $btext \
             -borderwidth $fake_btn_cfg(bwd) \
             -font $fake_btn_cfg(fnt)
-        fake_btn_op $bname create $bcommand
-        bind $bname <ButtonPress> [list fake_btn_op $bname press $bcommand]
-        bind $bname <ButtonRelease> [list fake_btn_op $bname release $bcommand]
-        bind $bname <Leave> [list fake_btn_op $bname leave $bcommand]
+        fake_btn_op $bname create
+        bind $bname <ButtonPress> [list fake_btn_op $bname press]
+        bind $bname <ButtonRelease> [list fake_btn_op $bname release]
+        bind $bname <Leave> [list fake_btn_op $bname leave]
 
         # If this were to become a more general "fake button" implementation,
         # might want:
         #       more configurable options
         #       global command $bname to do flash / configure / invoke
-        #       override "destroy" to remove fake_btn_state array entry
+        #       override "destroy" to remove fake_btn_{state,cmd} array entries
     }
 
-    proc fake_btn_op {bname op bcommand} {
-        global fake_btn_state fake_btn_cfg
+    proc fake_btn_op {bname op} {
+        global fake_btn_state fake_btn_cfg fake_btn_cmd
 
         set doit 0
 
@@ -262,7 +263,7 @@ if {$aqua_fake_buttons && [tk windowingsystem] eq "aqua"} {
         }
 
         if {$doit} {
-            uplevel "#0" $bcommand
+            uplevel "#0" $fake_btn_cmd($bname)
         }
     }
     set Button fake_btn
