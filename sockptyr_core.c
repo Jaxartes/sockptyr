@@ -1400,7 +1400,7 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
         !conn->linked->u.u_conn.buf_empty) {
 
         lconn = &(conn->linked->u.u_conn);
-        if (lconn->buf_in > conn->buf_out) {
+        if (lconn->buf_in > lconn->buf_out) {
             len = lconn->buf_in - lconn->buf_out;
         } else {
             len = lconn->buf_sz - lconn->buf_out;
@@ -1429,12 +1429,18 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             if (lconn->buf_out == lconn->buf_sz) {
                 lconn->buf_out = 0; /* wrap around */
             }
-            if (lconn->buf_in == lconn->buf_out || !lconn->linked) {
+            if (lconn->buf_in == lconn->buf_out) {
                 /* became empty */
                 lconn->buf_empty = 1;
                 lconn->buf_in = lconn->buf_out = 0;
             }
         }
+    }
+
+    /* if the connetion isn't linked, just make it a bit bucket */
+    if (!conn->linked) {
+        conn->buf_empty = 1;
+        conn->buf_in = conn->buf_out = 0;
     }
 
     /* since buffer pointers may have moved, maybe the set of events we could
