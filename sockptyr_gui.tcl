@@ -316,12 +316,126 @@ pack .detail.lbb.x -side left
 pack .detail.lbb -side bottom -fill x
 pack .detail -side right -fill both
 
+bind . <KeyPress-Up>       [list move_in_list - one]
+bind . <KeyPress-Down>     [list move_in_list + one]
+bind . <KeyPress-Prior>    [list move_in_list - page]
+bind . <KeyPress-Next>     [list move_in_list + page]
+bind . <KeyPress-Home>     [list move_in_list - all]
+bind . <KeyPress-End>      [list move_in_list + all]
+
 proc badconfig {msg} {
     puts stderr "Bad hard coded configuration: $msg"
     .detail.m.l2 configure -text "Bad hard coded configuration"
     .detail.m.l3 configure -text $msg
     .detail.m.l4 configure -text ""
     vwait forever
+}
+
+# move_in_list: Move around within the list of connections.  $dir is
+# "-" or "+" for direction; $amt is "one", "page", or "all" for amount.
+proc move_in_list {dir amt} {
+    global conn_sel conn_byord conn_lord conn_count conn_tags
+
+    lassign [.conns.can cget -scrollregion] rx1 ry1 rx2 ry2
+    if {$conn_count < 1 || $ry2 <= $ry1} {
+        # there are no connections
+        break
+    }
+
+    # What connection is currently selected?  That'll be our starting point.
+    # If there isn't one, assume the first in the list.
+    if {$conn_sel eq ""} {
+        if {[info exists conn_byord(0)]} {
+            set cur_conn $conn_byord(0)
+        } else {
+            # there are no connections; do nothing
+            return
+        }
+    } else {
+        set cur_conn $conn_sel
+    }
+    set cur_pos $conn_lord($cur_conn)
+
+    # Select a new connection as specified.
+    set new_pos $cur_pos
+    switch -- $amt {
+        "one" {
+            # move up or down by one list entry
+            if {$dir eq "+"} {
+                incr new_pos
+            } else {
+                incr new_pos -1
+            }
+        }
+        "page" {
+            # move up or down by about what you can see at once
+            if {$dir eq "+"} {
+                while {1} {
+                    # single step
+                    incr new_pos
+                    if {$new_pos >= $conn_count - 1} {
+                        break
+                    }
+                    # see where that gets us
+                    set new_conn $conn_byord($new_pos)
+                    set nct $conn_tags($new_conn)
+                    lassign [.conns.can bbox $nct.c] bx1 by1 bx2 by2
+                    lassign [.conns.can yview] vp1 vp2
+                    set tp [expr {($by2 - $ry1) / double($ry2 - $ry1)}]
+                    if {$tp > $vp2} {
+                        break
+                    }
+                }
+            } else {
+                while {1} {
+                    # single step
+                    incr new_pos -1
+                    if {$new_pos <= 0} {
+                        break
+                    }
+                    # see where that gets us
+                    set new_conn $conn_byord($new_pos)
+                    set nct $conn_tags($new_conn)
+                    lassign [.conns.can bbox $nct.c] bx1 by1 bx2 by2
+                    lassign [.conns.can yview] vp1 vp2
+                    set tp [expr {($by1 - $ry1) / double($ry2 - $ry1)}]
+                    if {$tp < $vp1} {
+                        break
+                    }
+                }
+            }
+        }
+        "all" {
+            # move to the top or bottom of the list
+            if {$dir eq "+"} {
+                set new_pos [expr {$conn_count - 1}]
+            } else {
+                set new_pos 0
+            }
+        }
+    }
+
+    # Avoid moving out of range.
+    if {$new_pos < 0} {
+        set new_pos 0
+    } elseif {$new_pos >= $conn_count} {
+        set new_pos [expr {$conn_count - 1}]
+    }
+    set new_conn $conn_byord($new_pos)
+
+    # If the new connection is not visible, adjust scrollbar appropriately.
+    lassign [.conns.can bbox $conn_tags($new_conn)] bx1 by1 bx2 by2
+    lassign [.conns.can yview] vp1 vp2
+    set tp1 [expr {($by1 - $ry1) / double($ry2 - $ry1)}]
+    set tp2 [expr {($by2 - $ry1) / double($ry2 - $ry1)}]
+    if {$tp2 > $vp2} {
+        .conns.can yview moveto $tp1
+    } elseif {$tp1 < $vp1} {
+        .conns.can yview moveto [expr {$tp2 + $vp1 - $vp2}]
+    }
+
+    # Show details for the new connection.
+    conn_sel $new_conn
 }
 
 ## ## ## Load the sockptyr library
@@ -362,8 +476,11 @@ array set sockptyr_info [sockptyr info]
 #       associated with label $label in $config(...).
 #   $conn_tags() is a counter used for assigning $conn_tags(...) values.
 #   $conn_sel is the selected connection's label
+#   $conn_byord($pos) == $label where $conn_lord($label) == $pos
+#   $conn_count is the number of connections in the list
 
 set conn_tags() 0
+set conn_count 0
 
 # conn_add: Called when there's a new connection to add to the list.
 # Parameters:
@@ -514,10 +631,12 @@ proc conn_add {label ok source he qual} {
 # conn_pos: Go through the connection list after it has changed, to
 # reposition all connections.
 proc conn_pos {} {
-    global conns conn_tags listwidth bgcolor bgcolor2 conn_lord
+    global conns conn_tags listwidth bgcolor bgcolor2
+    global conn_lord conn_byord conn_count
 
     set y 0
     set i 0
+    array unset conn_byord
     foreach conn $conns {
         set tag $conn_tags($conn)
         lassign [.conns.can bbox $tag.c] obx1 oby1 obx2 oby2
@@ -525,11 +644,13 @@ proc conn_pos {} {
         lassign [.conns.can bbox $tag.c] nbx1 nby1 nbx2 nby2
         .conns.can coords $tag.r 0 $nby1 $listwidth $nby2
         set conn_lord($conn) $i
+        set conn_byord($i) $conn
         .conns.can itemconfigure $tag.r \
             -fill [expr {($conn_lord($conn) & 1) ? $bgcolor2 : $bgcolor}]
         set y [expr {$y + $nby2 - $nby1}]
         incr i
     }
+    set conn_count $i
 
     # and adjust the scrollbar
     .conns.can configure -scrollregion [list 0 0 $listwidth $y]
