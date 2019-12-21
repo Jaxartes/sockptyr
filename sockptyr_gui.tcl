@@ -343,10 +343,11 @@ proc move_in_list {dir amt} {
     }
 
     # What connection is currently selected?  That'll be our starting point.
-    # If there isn't one, assume the first in the list.
+    # If there isn't one, just go to the first in the list
     if {$conn_sel eq ""} {
         if {[info exists conn_byord(0)]} {
             set cur_conn $conn_byord(0)
+            set amt "no-move"
         } else {
             # there are no connections; do nothing
             return
