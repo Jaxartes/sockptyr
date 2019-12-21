@@ -554,7 +554,7 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[])
 {
     struct sockptyr_data *sd = cd;
-    struct sockptyr_hdl *hdls[2];
+    struct sockptyr_hdl *hdls[2], *olinked[2];
     struct sockptyr_conn *conns[2];
     int i;
     char buf[512];
@@ -578,6 +578,7 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
 
     /* unlink them from whatever they were on before */
     for (i = 0; i < argc; ++i) {
+        olinked[i] = conns[i]->linked;
         if (conns[i]->linked) {
             conns[i]->linked->u.u_conn.linked = NULL;
             conns[i]->linked = NULL;
@@ -590,9 +591,12 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
         conns[1]->linked = hdls[0];
     }
 
-    /* and update what evens they can handle based on the new linkage */
+    /* and update what events they can handle based on the new linkage */
     for (i = 0; i < argc; ++i) {
         sockptyr_register_conn_handler(hdls[i]);
+        if (olinked[i]) {
+            sockptyr_register_conn_handler(olinked[i]);
+        }
     }
 
     return(TCL_OK);
@@ -755,9 +759,13 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int dofree)
                 if (conn->fd >= 0) {
                     Tcl_DeleteFileHandler(conn->fd);
                     close(conn->fd);
+                    conn->fd = -1;
                 }
-                if (conn->linked) {
+                if (conn->linked != NULL &&
+                    conn->linked->u.u_conn.linked != hdl) {
+
                     conn->linked->u.u_conn.linked = NULL;
+                    sockptyr_register_conn_handler(conn->linked);
                 }
                 ckfree((void *)conn->buf);
                 if (conn->onclose) ckfree(conn->onclose);
@@ -788,6 +796,7 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int dofree)
                 if (lstn->sok >= 0) {
                     Tcl_DeleteFileHandler(lstn->sok);
                     close(lstn->sok);
+                    lstn->sok = -1;
                 }
                 Tcl_DecrRefCount(lstn->proc);
             }
@@ -1238,7 +1247,7 @@ static int sockptyr_cmd_exec(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[])
 {
     pid_t child;
-    int wstatus, fd;
+    int wstatus, fd, maxfd;
 
     if (argc != 1) {
         Tcl_SetResult(interp, "usage: sockptyr exec $command", TCL_STATIC);
@@ -1280,6 +1289,8 @@ static int sockptyr_cmd_exec(ClientData cd, Tcl_Interp *interp,
         dup2(STDIN_FILENO, fd);
 
         /* close file descriptors other than stdin/stderr/stdout */
+        maxfd = sysconf(_SC_OPEN_MAX);
+        fprintf(stderr, "XXX maxfd=%d\n", maxfd); /* XXX grot */
         for (fd = 3; fd < FD_SETSIZE; ++fd) {
             close(fd);
         }

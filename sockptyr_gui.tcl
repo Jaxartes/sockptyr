@@ -926,15 +926,18 @@ proc read_and_connect_inotify {path label flags cookie name} {
         set fullpath [file join $path $name]
         if {$name eq ""} {
             # huh?
-            continue
+            puts stderr "inotify gave us CREATE update w/o name"
+            return
         }
         if {[string match ".*" $name]} {
             # hidden file, skip
-            continue
+            puts stderr "ignoring new file $name as it's hidden (a dotfile)"
+            return
         }
         if {[catch {file type $fullpath} t] || $t ne "socket"} {
             # not a socket, skip
-            continue
+            puts stderr "ignoring new file $name is it's not a socket"
+            return
         }
 
         # here's a socket
