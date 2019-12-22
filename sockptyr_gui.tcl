@@ -30,94 +30,24 @@ exec /usr/bin/wish "$0" ${1+"$@"}
 # want to hook up to, and gives you buttons for, e.g. starting terminal
 # windows hooked up to them.
 
-## ## ## Hard coded configuration
+## ## ## Configuration
 
-# Some of this information would ideally be moved to a configuration file,
-# for easier editing.  But for now, just putting it in the Tcl script
-# itself.
+# Read configuration from a file, "sockptyr.cfg", in the same directory
+# as the script.  It's actually a Tcl script itself, which builds the
+# $config(...) array.  See "sockptyr.cfg.example" for an example config
+# and documentation.
+
+# find & read that config file
+set config_file_name [file join [file dirname [info script]] sockptyr.cfg]
+puts stderr "reading config file at $config_file_name"
+source $config_file_name
 
 # $sockptyr_library_path: File pathname to load the sockptyr library
 # (compiled from sockptyr_core.c).
-set sockptyr_library_path ./sockptyr[info sharedlibextension]
+set sockptyr_library_path \
+    [file join [file dirname [info script]] "sockptyr[info sharedlibextension]"]
 
-# $config(...): Configuration of what we monitor and what we do with it.
-# An array with various keys and values as follows:
-#       Identify each connection with a label $label
-#           which is also used in display etc
-#           the label actually used depends on the connection source
-#           for "listen": $label:$counter
-#           for "connect": $label
-#           for "directory": $label:[basename $filename]
-#       set config($label:source) ...
-#           specifies the connection source, one of the following lists
-#           To listen for connections on a UNIX domain stream socket:
-#               2 elements: listen $filename
-#           To connect to a UNIX domain stream socket:
-#               2 elements: connect $filename
-#           To monitor a directory for UNIX domain stream sockets, and
-#           connect to them:
-#               3 elements: directory $dirname $interval
-#               If "inotify" is available it uses that to monitor the
-#               directory.  Otherwise it reads the directory every
-#               $interval seconds.
-#       set config($label:button:$num:...)
-#           Configuration for buttons on the connection from this source.
-#           The buttons are numbered 0, 1, etc.  See below for details
-#           to be included.
-#
-#           There should be at least two buttons, one to use the connection
-#           somehow and one to close it.  Perhaps more.
-#       set config($label:button:$num:text) ...
-#           Text to show on the button
-#       set config($label:button:$num:always) ...
-#           Flag indicating this button is always applicable even when the
-#           connection has been disconnected.  1 is true, 0 or absence is
-#           false.
-#       set config($label:button:$num:action) ...
-#           Tcl list defining action to perform for this button.
-#           It's a partial Tcl command to which the following will be
-#           appended:
-#               config label
-#               full label
-#           Pre-coded commands:
-#               conn_action_ptyrun $cmd $statlong $statshort $cfglbl $fulllbl
-#                   Open a PTY and execute the specified program $cmd,
-#                   a shell command with limited "%" substitution:
-#                       %% - "%"
-#                       %l - full label
-#                       %p - PTY pathname
-#                   Usually the command should end with "&".
-#                   $statlong & $statshort are long & short status strings
-#                   to show for the connection once this is done.
-#               conn_action_loopback $cfglbl $fulllbl
-#                   Hook the connection up to itself (loopback).
-#               conn_action_close $cfglbl $fulllbl
-#                   Close the connection and get rid of it.
-
-set config(LISTY:source) {listen ./sockptyr_test_env_l}
-set config(LISTY:button:0:text) Terminal
-set config(LISTY:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
-set config(LISTY:button:1:text) Loopback
-set config(LISTY:button:1:action) conn_action_loopback
-set config(LISTY:button:2:text) Close
-set config(LISTY:button:2:action) conn_action_close
-set config(LISTY:button:2:always) 1
-set config(CONN:source) {connect ./sockptyr_test_env_c}
-set config(CONN:button:0:text) Terminal
-set config(CONN:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
-set config(CONN:button:1:text) Loopback
-set config(CONN:button:1:action) conn_action_loopback
-set config(CONN:button:2:text) Close
-set config(CONN:button:2:action) conn_action_close
-set config(CONN:button:2:always) 1
-set config(DIR:source) {directory ./sockptyr_test_env_d 20}
-set config(DIR:button:0:text) Terminal
-set config(DIR:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
-set config(DIR:button:1:text) Loopback
-set config(DIR:button:1:action) conn_action_loopback
-set config(DIR:button:2:text) Close
-set config(DIR:button:2:action) conn_action_close
-set config(DIR:button:2:always) 1
+# XXX check that there's at least something there
 
 ## ## ## GUI setup details, like where to find pictures
 
@@ -1018,7 +948,7 @@ proc read_and_connect_dir {path label} {
     if {$sockptyr_info(USE_INOTIFY)} {
         set incmd [list read_and_connect_inotify $path $label]
         if {[catch {sockptyr inotify $path IN_CREATE $incmd} msg]} {
-            puts stderr "sockptyr inontify $path failed: $msg"
+            puts stderr "sockptyr inotify $path failed: $msg"
         } else {
             return
         }
@@ -1085,6 +1015,11 @@ foreach k [array names config] {
         lappend labels $label
         set _labels($label) 1
     }
+}
+if {![llength $labels]} {
+    # In this configuration, we'd never do anything; so just quit.
+    puts stderr "$config_file_name doesn't specify any sources!"
+    exit 1
 }
 
 # Go through the configured labels and their buttons and set them up.

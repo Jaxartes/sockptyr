@@ -13,8 +13,8 @@ prerequisites:
 compile:
     make -f Makefile.linux
 configure:
-    Edit sockptyr_gui.tcl where there are a bunch of "set config(...)"
-    lines.  Comments in the code give some idea how.
+    Copy sockptyr.cfg.example to sockptyr.cfg and edit it to suit your
+    needs.  Comments in it give some idea how.
 run:
     wish sockptyr_gui.tcl
 use:
