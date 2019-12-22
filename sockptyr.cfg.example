@@ -65,29 +65,32 @@
 #                   so you may want to leave them out.
 #               conn_action_close $cfglbl $fulllbl
 #                   Close the connection and get rid of it.
+#       set config(verbosity)
+#           Making this 1 causes sockptyr to produce more output, for
+#           debugging.  Leaving it out makes it more quiet.
 
 set config(LISTY:source) {listen ./sockptyr_test_env_l}
 set config(LISTY:button:0:text) Terminal
 set config(LISTY:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
 set config(LISTY:button:1:text) Loopback
 set config(LISTY:button:1:action) conn_action_loopback
-set config(LISTY:button:2:text) Close
-set config(LISTY:button:2:action) conn_action_close
+set config(LISTY:button:2:text) Remove
+set config(LISTY:button:2:action) conn_action_remove
 set config(LISTY:button:2:always) 1
 set config(CONN:source) {connect ./sockptyr_test_env_c}
 set config(CONN:button:0:text) Terminal
 set config(CONN:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
 set config(CONN:button:1:text) Loopback
 set config(CONN:button:1:action) conn_action_loopback
-set config(CONN:button:2:text) Close
-set config(CONN:button:2:action) conn_action_close
+set config(CONN:button:2:text) Remove
+set config(CONN:button:2:action) conn_action_remove
 set config(CONN:button:2:always) 1
 set config(DIR:source) {directory ./sockptyr_test_env_d 20}
 set config(DIR:button:0:text) Terminal
 set config(DIR:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
 set config(DIR:button:1:text) Loopback
 set config(DIR:button:1:action) conn_action_loopback
-set config(DIR:button:2:text) Close
-set config(DIR:button:2:action) conn_action_close
+set config(DIR:button:2:text) Remove
+set config(DIR:button:2:action) conn_action_remove
 set config(DIR:button:2:always) 1
-
+set config(verbosity) 1

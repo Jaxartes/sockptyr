@@ -30,6 +30,14 @@ exec /usr/bin/wish "$0" ${1+"$@"}
 # want to hook up to, and gives you buttons for, e.g. starting terminal
 # windows hooked up to them.
 
+# dmsg -- emit a diagnostic message (if enabled)
+proc dmsg {msg} {
+    global config
+    if {$config(verbosity)} {
+        puts stderr $msg
+    }
+}
+
 ## ## ## Configuration
 
 # Read configuration from a file, "sockptyr.cfg", in the same directory
@@ -37,17 +45,18 @@ exec /usr/bin/wish "$0" ${1+"$@"}
 # $config(...) array.  See "sockptyr.cfg.example" for an example config
 # and documentation.
 
+# some defaults
+set config(verbosity) 0
+
 # find & read that config file
 set config_file_name [file join [file dirname [info script]] sockptyr.cfg]
-puts stderr "reading config file at $config_file_name"
+puts stderr "sockptyr_gui: reading config file at $config_file_name"
 source $config_file_name
 
 # $sockptyr_library_path: File pathname to load the sockptyr library
 # (compiled from sockptyr_core.c).
 set sockptyr_library_path \
     [file join [file dirname [info script]] "sockptyr[info sharedlibextension]"]
-
-# XXX check that there's at least something there
 
 ## ## ## GUI setup details, like where to find pictures
 
@@ -111,7 +120,7 @@ set aqua_fake_buttons 1
 # Hack to deal with bug in macOS native interface "aque" in which the buttons
 # show up blank.  This just makes a fake "button" implementation out of a label.
 if {$aqua_fake_buttons && [tk windowingsystem] eq "aqua"} {
-    puts stderr "macOS aqua hack running"
+    puts stderr "sockptyr_gui: macOS aqua hack running"
 
     set fake_btn_cfg(nfg) black     ; # normal foreground color
     set fake_btn_cfg(nbg) white     ; # normal background color
@@ -254,8 +263,8 @@ bind . <KeyPress-Home>     [list move_in_list - all]
 bind . <KeyPress-End>      [list move_in_list + all]
 
 proc badconfig {msg} {
-    puts stderr "Bad hard coded configuration: $msg"
-    .detail.m.l2 configure -text "Bad hard coded configuration"
+    puts stderr "Bad configuration: $msg"
+    .detail.m.l2 configure -text "Bad configuration"
     .detail.m.l3 configure -text $msg
     .detail.m.l4 configure -text ""
     vwait forever
@@ -424,7 +433,7 @@ set conn_count 0
 #       when making the connection.  For instance, where $source = "directory"
 #       and $ok = "1", $qual is the filename of the socket within the directory
 proc conn_add {label ok source he qual} {
-    puts stderr [list conn_add label $label ok $ok source $source he $he qual $qual]
+    dmsg [list conn_add label $label ok $ok source $source he $he qual $qual]
 
     global conns conn_cfgs conn_hdls conn_tags conn_desc conn_deact
     global conn_line1 conn_line2 conn_line3
@@ -592,7 +601,7 @@ proc conn_pos {} {
 # selected.
 set conn_sel ""
 proc conn_sel {conn} {
-    puts stderr [list conn_sel $conn]
+    dmsg [list conn_sel $conn]
 
     global conn_sel bgcolor fgcolor conn_tags conn_lord
     global conn_line1 conn_line2 conn_line3 bgcolor bgcolor2
@@ -656,7 +665,7 @@ conn_sel ""
 
 # conn_del: Remove a connection from the connection list.
 proc conn_del {conn} {
-    puts stderr [list conn_del $conn]
+    dmsg [list conn_del $conn]
 
     global conns conn_sel conn_deact
     global conn_hdls conn_cfgs conn_tags
@@ -726,7 +735,7 @@ proc conn_record_status {conn long short} {
 #       $cfg = configuration label for the connection
 #       $conn = full label for the connection
 proc conn_action_remove {cfg conn} {
-    puts stderr [list conn_action_remove $cfg $conn]
+    dmsg [list conn_action_remove $cfg $conn]
     conn_del $conn
 }
 
@@ -735,7 +744,7 @@ proc conn_action_remove {cfg conn} {
 #       $cfg = configuration label for the connection
 #       $conn = full label for the connection
 proc conn_action_loopback {cfg conn} {
-    puts stderr [list conn_action_loopback $cfg $conn]
+    dmsg [list conn_action_loopback $cfg $conn]
 
     global conn_deact conn_hdls
 
@@ -758,7 +767,7 @@ proc conn_action_loopback {cfg conn} {
 #       $cfg = configuration label for the connection
 #       $conn = full label for the connection
 proc conn_action_ptyrun {cmd statlong statshort cfg conn} {
-    puts stderr [list conn_action_ptyrun $cmd $statlong $statshort $cfg $conn]
+    dmsg [list conn_action_ptyrun $cmd $statlong $statshort $cfg $conn]
 
     global conn_deact conn_hdls
 
@@ -808,8 +817,8 @@ proc conn_action_ptyrun {cmd statlong statshort cfg conn} {
     }
 
     # Execute that command
-    puts stderr [list about to execute: $cmd2]
-    puts stderr [list result: [sockptyr exec $cmd2]]
+    dmsg [list about to execute: $cmd2]
+    dmsg [list result: [sockptyr exec $cmd2]]
 
     # Linkage, status, tracking, and cleanup
     sockptyr link $conn_hdls($conn) $pty_hdl
@@ -822,7 +831,7 @@ proc conn_action_ptyrun {cmd statlong statshort cfg conn} {
 # conn_onclose: Run when a connection gets closed (and not by us).
 #       $conn = full label for the connection
 proc conn_onclose {conn} {
-    puts stderr [list conn_onclose $conn]
+    dmsg [list conn_onclose $conn]
 
     global conn_hdls conn_deact
 
@@ -850,7 +859,7 @@ proc conn_onclose {conn} {
 # Could do something fancy, for now it doesn't even display the error
 # in the GUI, it just puts it on stderr.
 proc conn_onerror {conn sub ekws emsg} {
-    puts stderr [list conn_onerror $conn $sub $ekws $emsg]
+    dmsg [list conn_onerror $conn $sub $ekws $emsg]
 
     # see if some kind of disconnection is happening
     set discon 0
@@ -885,7 +894,7 @@ proc conn_onerror {conn sub ekws emsg} {
 #       $conn = full label for the connection
 #       $pty_hdl = handle for the PTY it's connected to
 proc ptyrun_byebye {conn pty_hdl} {
-    puts stderr [list ptyrun_byebye $conn $pty_hdl]
+    dmsg [list ptyrun_byebye $conn $pty_hdl]
 
     global conn_hdls conn_deact
 
@@ -910,7 +919,7 @@ proc read_and_connect_dir {path label} {
     global _racd_seen config sockptyr_info
 
     # trace message
-    puts stderr [list read_and_connect_dir path $path label $label]
+    dmsg [list read_and_connect_dir path $path label $label]
 
     # bookkeeping for record of what we've already seen
     if {![info exists _racd_seen($label)]} {
@@ -966,7 +975,7 @@ proc read_and_connect_dir {path label} {
 #   $cookie -- the API provides this to match related events together
 #   $name -- name of file if any
 proc read_and_connect_inotify {path label flags cookie name} {
-    puts stderr [list read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name]
+    dmsg [list read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name]
 
     if {[lsearch -glob -nocase $flags *IGNORE] >= 0} {
         puts stderr "$path is gone and will no longer be monitored."
@@ -1010,7 +1019,8 @@ array unset _labels
 set labels [list]
 foreach k [array names config] {
     lassign [split $k ":"] label lfield button bfield
-    if {![info exists _labels($label)]} {
+    if {[info exists config($label:source)] &&
+        ![info exists _labels($label)]} {
         lappend labels $label
         set _labels($label) 1
     }
@@ -1023,10 +1033,6 @@ if {![llength $labels]} {
 
 # Go through the configured labels and their buttons and set them up.
 foreach label [lsort $labels] {
-    if {![info exists config($label:source)]} {
-        badconfig "label '$label' has no source"
-        continue
-    }
     set source [lindex $config($label:source) 0]
     switch -- $source {
         "listen" {
