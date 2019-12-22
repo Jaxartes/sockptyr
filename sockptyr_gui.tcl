@@ -722,12 +722,11 @@ proc conn_record_status {conn long short} {
     }
 }
 
-# conn_action_close: Handle the GUI "close" button on a connection, to close
-# it and remove it from the list.
+# conn_action_remove: Get rid of the connection and remove it from our list.
 #       $cfg = configuration label for the connection
 #       $conn = full label for the connection
-proc conn_action_close {cfg conn} {
-    puts stderr [list conn_action_close $cfg $conn]
+proc conn_action_remove {cfg conn} {
+    puts stderr [list conn_action_remove $cfg $conn]
     conn_del $conn
 }
 
