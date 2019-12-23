@@ -15,4 +15,4 @@ sockptyr_core.o: sockptyr_core.c
 clean:
 	-rm -f sockptyr_core.o sockptyr$(DYL)
 test:
-	tclsh sockptyr_tests_auto.tcl ./sockptyr$(DYL) $(USE_INOTIFY)
+	tclsh tests/sockptyr_tests_auto.tcl ./sockptyr$(DYL) $(USE_INOTIFY)
