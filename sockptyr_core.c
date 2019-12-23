@@ -761,9 +761,7 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int dofree)
                     close(conn->fd);
                     conn->fd = -1;
                 }
-                if (conn->linked != NULL &&
-                    conn->linked->u.u_conn.linked != hdl) {
-
+                if (conn->linked != NULL && conn->linked != hdl) {
                     conn->linked->u.u_conn.linked = NULL;
                     sockptyr_register_conn_handler(conn->linked);
                 }
