@@ -1288,7 +1288,7 @@ static int sockptyr_cmd_exec(ClientData cd, Tcl_Interp *interp,
 
         /* close file descriptors other than stdin/stderr/stdout */
         maxfd = sysconf(_SC_OPEN_MAX);
-        for (fd = 3; fd < FD_SETSIZE; ++fd) {
+        for (fd = 3; fd < maxfd; ++fd) {
             close(fd);
         }
 
