@@ -56,6 +56,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -331,6 +332,7 @@ static void *slot_main(void *sl_voidp)
     u_int32_t txpos; /* sequence position for send */
     int idle, first = 1;
     struct dpds_consumer_state dcs;
+    struct stat sb;
 
     memset(&pfd, 0, sizeof(pfd));
 
@@ -345,12 +347,14 @@ static void *slot_main(void *sl_voidp)
         }
         first = 0;
 
-        /* create & bind a socket */
+        /* create a socket */
         lsok = socket(AF_UNIX, SOCK_STREAM, 0);
         if (lsok < 0) {
             tmsg("socket() failed: %s", strerror(errno));
             _exit(1);
         }
+
+        /* figure out socket name */
         memset(&aun, 0, sizeof(aun));
         aun.sun_family = AF_UNIX;
         snprintf(sname, sizeof(sname), "bulk2_%d_%d",
@@ -358,6 +362,14 @@ static void *slot_main(void *sl_voidp)
         ++name_ctr;
         snprintf(aun.sun_path, sizeof(aun.sun_path),
                  "%s/%s", sockdir, sname);
+
+        /* is there a conflicting socket? if so delete it */
+        if (stat(aun.sun_path, &sb) >= 0 && S_ISSOCK(sb.st_mode)) {
+            tmsg("unlinking pre-existing socket %s", aun.sun_path);
+            unlink(aun.sun_path);
+        }
+
+        /* bind the newly created socket to the name we chose */
         if (bind(lsok, (void *)&aun, sizeof(aun)) < 0) {
             tmsg("bind(%s/%s) failed: %s", sockdir, sname, strerror(errno));
             _exit(1);
@@ -372,6 +384,7 @@ static void *slot_main(void *sl_voidp)
             tmsg("listen(%s/%s) failed: %s", sockdir, sname, strerror(errno));
             _exit(1);
         }
+        tmsg("Listened on %s/%s", sockdir, sname);
 
         /* wait until we have a connection to accept() on the socket */
         pfd.fd = lsok;
@@ -400,6 +413,7 @@ static void *slot_main(void *sl_voidp)
                 break;
             }
         }
+        tmsg("Connection on %s/%s", sockdir, sname);
 
         /* wait a bit then accept() on the socket */
         do {
