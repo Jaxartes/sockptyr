@@ -31,3 +31,4 @@ Usage examples for each (run from the parent directory):
         wish sockptyr_gui.c
         ./sockptyr_tests_bulk2 ./sockptyr_test_env_d 10 300.0 1.0 0.25
         use control-C to terminate it
+        you may have to remove some sockets from the directory after control-C

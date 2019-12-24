@@ -329,12 +329,22 @@ static void *slot_main(void *sl_voidp)
     long long received, sent; /* bytes total received/sent on this socket */
     u_int32_t txseq; /* sequence used for send */
     u_int32_t txpos; /* sequence position for send */
-    int idle;
+    int idle, first = 1;
     struct dpds_consumer_state dcs;
 
     memset(&pfd, 0, sizeof(pfd));
 
     for (;;) {
+        /* wait a bit before creating socket -- except the first time half
+         * the time
+         */
+        if ((!first) || (nrand48(sl->xsubi) & 16)) {
+            do {
+                fsleep(erand48(sl->xsubi) * opint);
+            } while (nrand48(sl->xsubi) & 16);
+        }
+        first = 0;
+
         /* create & bind a socket */
         lsok = socket(AF_UNIX, SOCK_STREAM, 0);
         if (lsok < 0) {
@@ -526,11 +536,6 @@ static void *slot_main(void *sl_voidp)
         snprintf(aun.sun_path, sizeof(aun.sun_path),
                  "%s/%s", sockdir, sname);
         unlink(aun.sun_path);
-
-        /* wait a bit before doing it all again with a new socket */
-        do {
-            fsleep(erand48(sl->xsubi) * opint);
-        } while (nrand48(sl->xsubi) & 16);
     }
 }
 
