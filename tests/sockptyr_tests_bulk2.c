@@ -444,7 +444,7 @@ static void *slot_main(void *sl_voidp)
 
             /* see if we've been called on to report status */
             if (status_ctl_mon != status_ctl) {
-                status_ctl = status_ctl_mon;
+                status_ctl_mon = status_ctl;
                 tmsg("%s: received %lld bytes, sent %lld bytes",
                      sname, (long long)received, (long long)sent);
             }
