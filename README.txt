@@ -32,7 +32,3 @@ license:
 explanation of the name:
     Pronounced "sock-puh-teer".  Named in reference to its handling
     of sockets, pseudo-terminals (PTYs), and the word "puppeteer."
-future plans:
-    None really.  The biggest potential improvement I could see would be
-    having it take a real configuration file, or be configured through
-    a GUI, instead of the lame "edit the script" method used now.
