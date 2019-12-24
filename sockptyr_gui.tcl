@@ -47,6 +47,7 @@ proc dmsg {msg} {
 
 # some defaults
 set config(verbosity) 0
+set config(directory_retries) {250 500 1250}
 
 # find & read that config file
 set config_file_name [file join [file dirname [info script]] sockptyr.cfg]
@@ -565,6 +566,8 @@ proc conn_add {label ok source he qual} {
     # record status
     if {$conn_hdls($conn) ne ""} {
         conn_record_status $conn "" ""
+    } else {
+        conn_record_status $conn "Broken" "!"
     }
 
     # Record this connection's existence & put the connections in order.
@@ -999,6 +1002,15 @@ proc read_and_connect_dir {path label} {
     # trace message
     dmsg [list read_and_connect_dir path $path label $label]
 
+    # get configuration
+    set srccfg $config($label:source)
+    set pollint [lindex $srccfg 2]
+    if {[llength $srccfg] > 3} {
+        set retries_list [lindex $srccfg 3]
+    } else {
+        set retries_list $config(directory_retries)
+    }
+
     # bookkeeping for record of what we've already seen
     if {![info exists _racd_seen($label)]} {
         set _racd_seen($label) [list]
@@ -1018,11 +1030,7 @@ proc read_and_connect_dir {path label} {
         }
         set nsockets($name) 1
         if {![info exists osockets($name)]} {
-            if {[catch {sockptyr connect $fullpath} hdl]} {
-                conn_add $label 0 directory $hdl $name
-            } else {
-                conn_add $label 1 directory $hdl $name
-            }
+            connect_with_retries $fullpath $label directory $name $retries_list
         }
     }
 
@@ -1032,14 +1040,14 @@ proc read_and_connect_dir {path label} {
     # start inotify, if possible; otherwise just schedule to re-scan
     # the directory a little later
     if {$sockptyr_info(USE_INOTIFY)} {
-        set incmd [list read_and_connect_inotify $path $label]
+        set incmd [list read_and_connect_inotify $path $label $retries_list]
         if {[catch {sockptyr inotify $path IN_CREATE $incmd} msg]} {
             puts stderr "sockptyr inotify $path failed: $msg"
         } else {
             return
         }
     }
-    lassign $config($label:source) source path pollint
+
     after [expr {int(ceil($pollint * 1000.0))}] \
         [list read_and_connect_dir $path $label]
 }
@@ -1049,10 +1057,11 @@ proc read_and_connect_dir {path label} {
 # Parameters:
 #   $path -- pathname to the directory
 #   $label -- source label from $config(...)
+#   $retries_list -- list of millisecond intervals for connection retries
 #   $flags -- list of flags such as IN_CREATE
 #   $cookie -- the API provides this to match related events together
 #   $name -- name of file if any
-proc read_and_connect_inotify {path label flags cookie name} {
+proc read_and_connect_inotify {path label retries_list flags cookie name} {
     dmsg [list read_and_connect_inotify path $path label $label flags $flags cookie $cookie name $name]
 
     if {[lsearch -glob -nocase $flags *IGNORE] >= 0} {
@@ -1079,11 +1088,27 @@ proc read_and_connect_inotify {path label flags cookie name} {
         }
 
         # here's a socket
-        if {[catch {sockptyr connect $fullpath} hdl]} {
-            conn_add $label 0 directory $hdl $name
-        } else {
-            conn_add $label 1 directory $hdl $name
-        }
+        connect_with_retries $fullpath $label directory $name $retries_list
+    }
+}
+
+# connect_with_retries: Connect to a socket.  If it fails, retry at
+# the given intervals until out of retries.  In either case add the
+# socket to the GUI list.
+proc connect_with_retries {fullpath label directory name retries_list} {
+    dmsg [list connect_with_retries $fullpath $label $directory $name $retries_list]
+
+    if {![catch {sockptyr connect $fullpath} hdl]} {
+        # success
+        conn_add $label 1 directory $hdl $name
+    } elseif {[llength $retries_list]} {
+        # try again
+        after [lindex $retries_list 0] \
+            [list connect_with_retries $fullpath $label $directory $name \
+                [lrange $retries_list 1 end]]
+    } else {
+        # failure
+        conn_add $label 0 directory $hdl $name
     }
 }
 

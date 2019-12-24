@@ -25,10 +25,15 @@
 #               2 elements: connect $filename
 #           To monitor a directory for UNIX domain stream sockets, and
 #           connect to them:
-#               3 elements: directory $dirname $interval
+#               3-4 elements: directory $dirname $interval [$retries]
 #               If "inotify" is available it uses that to monitor the
 #               directory.  Otherwise it reads the directory every
 #               $interval seconds.
+#               If $retries is supplied it's a list of numbers, each a
+#               time period in milliseconds to wait before retrying
+#               a failed connection.
+#               If $retries is not supplied, config(directory_retries)
+#               is used instead.
 #       set config($label:button:$num:...)
 #           Configuration for buttons on the connection from this source.
 #           The buttons are numbered 0, 1, etc.  See below for details
@@ -73,6 +78,10 @@
 #       set config(verbosity)
 #           Making this 1 causes sockptyr to produce more output, for
 #           debugging.  Leaving it out makes it more quiet.
+#       set config(directory_retries)
+#           List of numbers, giving milliseconds delay between retries
+#           for connecting to sockets found via the "directory" source type,
+#           see above.  May be overridden on a per-source basis.
 
 set config(LISTY:source) {listen ./sockptyr_test_env_l}
 set config(LISTY:button:0:text) Terminal
@@ -99,3 +108,4 @@ set config(DIR:button:2:text) Remove
 set config(DIR:button:2:action) conn_action_remove
 set config(DIR:button:2:always) 1
 set config(verbosity) 1
+set config(directory_retries) {250 500 1250}
