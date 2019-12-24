@@ -106,6 +106,9 @@ set detwidth 384
 # winheight - height of window
 set winheight 448
 
+# mark_half_size - half the size of the mark made by conn_action_mark
+set mark_half_size 4
+
 # bgcolor - background color
 # fgcolor - foreground color
 # bgcolor2 - slightly highlighted background color
@@ -418,9 +421,11 @@ array set sockptyr_info [sockptyr info]
 #   $conn_sel is the selected connection's label
 #   $conn_byord($pos) == $label where $conn_lord($label) == $pos
 #   $conn_count is the number of connections in the list
+#   $conn_mark is the connection selected with "conn_action_link", if any
 
 set conn_tags() 0
 set conn_count 0
+set conn_mark ""
 
 # conn_add: Called when there's a new connection to add to the list.
 # Parameters:
@@ -541,9 +546,11 @@ proc conn_add {label ok source he qual} {
     # tagging:
     #       $tag - all the stuff for this connection
     #       $tag.t - text label for the connection (left side)
+    #       $tag.m - synonymous with Mark if it's on this connection
     #       $tag.n - text note for the connection (right side)
     #       $tag.r - rectangle around the connection's stuff
     #       $tag.c - everything but $tag.r
+    #       Mark - mark for conn_action_mark; not created here
     .conns.can create rectangle 0 0 0 0 \
         -fill $bgcolor -outline "" \
         -tags [list $tag $tag.r]
@@ -612,6 +619,7 @@ proc conn_sel {conn} {
         .conns.can itemconfigure $tag.r \
             -fill [expr {($conn_lord($conn_sel) & 1) ? $bgcolor2 : $bgcolor}]
         .conns.can itemconfigure $tag.c -fill $fgcolor
+        .conns.can itemconfigure $tag.m -fill $fgcolor
     }
 
     destroy .detail.ubb.if
@@ -630,6 +638,7 @@ proc conn_sel {conn} {
         .detail.m.l4 configure -text $conn_line3($conn)
         .conns.can itemconfigure $tag.r -fill $fgcolor
         .conns.can itemconfigure $tag.c -fill $bgcolor
+        .conns.can itemconfigure $tag.m -fill $bgcolor
         frame .detail.ubb.if
         pack .detail.ubb.if -expand 1 -fill both
 
@@ -669,7 +678,7 @@ proc conn_del {conn} {
 
     global conns conn_sel conn_deact
     global conn_hdls conn_cfgs conn_tags
-    global conn_line1 conn_line2 conn_line3 conn_lord
+    global conn_line1 conn_line2 conn_line3 conn_lord conn_mark
 
     if {$conn eq ""} return ; # shouldn't happen
 
@@ -707,6 +716,10 @@ proc conn_del {conn} {
     unset conn_hdls($conn)
     unset conn_cfgs($conn)
     unset conn_lord($conn)
+    if {$conn_mark eq $conn} {
+        set conn_mark ""
+        .conns.can delete Mark
+    }
 
     # redraw the GUI list of connections
     
@@ -826,6 +839,71 @@ proc conn_action_ptyrun {cmd statlong statshort cfg conn} {
     set conn_deact($conn) [list ptyrun_byebye $conn $pty_hdl]
     sockptyr onclose $pty_hdl [list ptyrun_byebye $conn $pty_hdl]
     sockptyr onerror $pty_hdl [list conn_onerror ${conn} p]
+}
+
+# conn_action_mark: Handle the GUI "mark" action on the connection, marking
+# it for later use with conn_action_link.
+#       $cfg = configuration label for the connection
+#       $conn = full label for the connection
+proc conn_action_mark {cfg conn} {
+    dmsg [list conn_action_mark $cfg $conn]
+
+    global conn_hdls conn_mark conn_tags mark_half_size fgcolor bgcolor
+
+    set old_mark $conn_mark
+    set conn_mark $conn
+    .conns.can delete Mark
+
+    lassign [.conns.can bbox $conn_tags($conn).t] tx1 ty1 tx2 ty2
+    set mwx [expr {$tx2 + $mark_half_size}] ; # west corner of mark, X coord
+    set mwy [expr {($ty1 + $ty2) / 2}]      ; # west corner of mark, Y coord
+    .conns.can create polygon \
+        $mwx $mwy \
+        [expr {$mwx + $mark_half_size}] [expr {$mwy + $mark_half_size}] \
+        [expr {$mwx + 2 * $mark_half_size}] $mwy \
+        [expr {$mwx + $mark_half_size}] [expr {$mwy - $mark_half_size}] \
+        -fill $bgcolor \
+        -outline "" \
+        -tags [list $conn_tags($conn) $conn_tags($conn).m Mark]
+}
+
+# conn_action_link: Handle the GUI "link" button on a connection,
+# to hook it up to the one chosen with conn_action_mark.
+#       $cfg = configuration label for the connection
+#       $conn = full label for the connection
+proc conn_action_link {cfg conn} {
+    dmsg [list conn_action_link $cfg $conn]
+
+    global conn_deact conn_hdls conn_mark
+
+    # has a connection been marked?
+    if {$conn_mark eq "" || ![info exists conn_hdls($conn_mark)]} {
+        error "cannot link without marking a connection first"
+    }
+
+    # are both connections in the right state?
+    foreach c [list $conn $conn_mark] {
+        if {$conn_hdls($c) eq ""} {
+            error "cannot link connections when one is closed"
+        }
+    }
+
+    # undo anything done before on either connection
+    foreach c [list $conn $conn_mark] {
+        if {$conn_deact($c) ne ""} {
+            uplevel "#0" $conn_deact($c)
+            set conn_deact($c) ""
+        }
+    }
+
+    # link them
+    sockptyr link $conn_hdls($conn) $conn_hdls($conn_mark)
+    conn_record_status $conn "Linked to $conn_mark" "L"
+    conn_record_status $conn_mark "Linked to $conn" "L"
+
+    # remove mark
+    set conn_mark ""
+    .conns.can delete Mark
 }
 
 # conn_onclose: Run when a connection gets closed (and not by us).
