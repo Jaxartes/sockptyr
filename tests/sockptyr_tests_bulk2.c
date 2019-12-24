@@ -54,6 +54,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <signal.h>
 #include <poll.h>
 #include <pthread.h>
 #include <sys/stat.h>
@@ -482,7 +483,7 @@ static void *slot_main(void *sl_voidp)
             rv = read(csok, rbuf + rgot, todo);
             if (rv == 0 || (rv < 0 && errno == EPIPE)) {
                 /* the other side closed the connection */
-                tmsg("%s: apparently other side closed connection", sname);
+                tmsg("%s: other side closed connection", sname);
                 break;
             } else if (rv < 0) {
                 if (errno == EINTR) {
@@ -520,6 +521,10 @@ static void *slot_main(void *sl_voidp)
             } else if (rv < 0) {
                 if (errno == EINTR) {
                     /* transient and not really an error */
+                } else if (errno == EPIPE) {
+                    /* connection closed */
+                    tmsg("%s: other side closed connection", sname);
+                    break;
                 } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     /* can't write, at the moment */
                     if (idle) {
@@ -575,6 +580,7 @@ int main(int argc, char **argv)
 
     int i, j, ch;
     struct slot *slots;
+    struct sigaction siga;
 
     /* parse command line parameters */
     if (argc != 6) {
@@ -613,6 +619,9 @@ int main(int argc, char **argv)
     pthread_mutex_init(&tmsg_mutex, NULL);
     slots = calloc(nslots, sizeof(slots[0]));
     srand48(time(NULL)); /* not a secure practice; but it's just for a test */
+    memset(&siga, 0, sizeof(siga));
+    siga.sa_handler = SIG_IGN;
+    sigaction(SIGPIPE, &siga, NULL);
 
     /* start threads, they'll run and do their thing */
     for (i = 0; i < nslots; ++i) {
