@@ -406,6 +406,10 @@ array set sockptyr_info [sockptyr info]
 #       and possibly other connections
 #   $conn_hdls($label) maps the unique label string to a "sockptyr" handle
 #       or "" if it's not ok
+#   $conn_wasok($label) is 1 if the connection was ok once, 0 if it
+#       never was.  If $conn_hdls($label) has a handle then it's going
+#       to be 1.  If $conn_hdls($label ) is "" this determines whether
+#       the connection "failed" or was "closed".
 #   $conn_tags($label) maps the unique label string to a tag in .conns.can
 #   $conn_line1($label) maps the unique label string to descriptive text
 #   $conn_line2($label) maps the unique label string to descriptive text
@@ -442,6 +446,7 @@ proc conn_add {label ok source he qual} {
     dmsg [list conn_add label $label ok $ok source $source he $he qual $qual]
 
     global conns conn_cfgs conn_hdls conn_tags conn_desc conn_deact
+    global conn_wasok
     global conn_line1 conn_line2 conn_line3
     global listwidth config fgcolor bgcolor
 
@@ -497,8 +502,10 @@ proc conn_add {label ok source he qual} {
     # record details
     if {$ok} {
         set conn_hdls($conn) $he
+        set conn_wasok($conn) 1
     } else {
         set conn_hdls($conn) ""
+        set conn_wasok($conn) 0
     }
     set conn_cfgs($conn) $label
     set conn_line3($conn) ""
@@ -564,11 +571,7 @@ proc conn_add {label ok source he qual} {
     .conns.can bind $tag <Button-1> [list conn_sel $conn]
 
     # record status
-    if {$conn_hdls($conn) ne ""} {
-        conn_record_status $conn "" ""
-    } else {
-        conn_record_status $conn "Broken" "!"
-    }
+    conn_record_status $conn "" ""
 
     # Record this connection's existence & put the connections in order.
     # This could obviously be done more efficiently but there are many
@@ -680,7 +683,7 @@ proc conn_del {conn} {
     dmsg [list conn_del $conn]
 
     global conns conn_sel conn_deact
-    global conn_hdls conn_cfgs conn_tags
+    global conn_hdls conn_cfgs conn_tags conn_wasok
     global conn_line1 conn_line2 conn_line3 conn_lord conn_mark
 
     if {$conn eq ""} return ; # shouldn't happen
@@ -719,6 +722,7 @@ proc conn_del {conn} {
     unset conn_hdls($conn)
     unset conn_cfgs($conn)
     unset conn_lord($conn)
+    unset conn_wasok($conn)
     if {$conn_mark eq $conn} {
         set conn_mark ""
         .conns.can delete Mark
@@ -731,10 +735,30 @@ proc conn_del {conn} {
 
 # conn_record_status: Record connection status like linked or not open.
 proc conn_record_status {conn long short} {
-    global conn_line3 conn_sel conn_tags
+    global conn_line3 conn_sel conn_tags conn_hdls conn_wasok
 
-    if {$long eq ""} {
-        set long "One-sided"
+    if {$conn_hdls($conn) ne ""} {
+        # connection is ok: if no status given it's "one sided"
+        if {$long eq ""} {
+            set long "One-sided"
+        }
+    } elseif {$conn_wasok($conn)} {
+        # connection was ok but isn't any more: if no status given
+        # it's "closed"
+        if {$short eq ""} {
+            set short "C"
+        }
+        if {$long eq ""} {
+            set long "Closed"
+        }
+    } else {
+        # connection was never ok: if no status given it's "failed"
+        if {$short eq ""} {
+            set short "!"
+        }
+        if {$long eq ""} {
+            set long "Failed"
+        }
     }
 
     set conn_line3($conn) "Status: $long"
@@ -904,7 +928,14 @@ proc conn_action_link {cfg conn} {
     conn_record_status $conn "Linked to $conn_mark" "L"
     conn_record_status $conn_mark "Linked to $conn" "L"
 
-    # remove mark
+    # follow ups
+    set conn_deact($conn) [list link_byebye $conn $conn_mark]
+    set conn_deact($conn_mark) [list link_byebye $conn_mark $conn]
+    sockptyr onclose $conn_hdls($conn) [list conn_onclose $conn]
+    sockptyr onerror $conn_hdls($conn) [list conn_onerror $conn c]
+    sockptyr onclose $conn_hdls($conn_mark) [list conn_onclose $conn_mark]
+    sockptyr onerror $conn_hdls($conn_mark) [list conn_onerror $conn_mark c]
+
     set conn_mark ""
     .conns.can delete Mark
 }
@@ -914,7 +945,7 @@ proc conn_action_link {cfg conn} {
 proc conn_onclose {conn} {
     dmsg [list conn_onclose $conn]
 
-    global conn_hdls conn_deact
+    global conn_hdls conn_deact conn_mark
 
     if {$conn_deact($conn) ne ""} {
         uplevel "#0" $conn_deact($conn)
@@ -927,14 +958,21 @@ proc conn_onclose {conn} {
         sockptyr onerror $conn_hdls($conn)
         sockptyr close $conn_hdls($conn)
         set conn_hdls($conn) ""
+        if {$conn_mark eq $conn} {
+            set conn_mark ""
+            .conns.can delete Mark
+        }
     }
 
-    conn_record_status $conn "Closed" "C"
+    conn_record_status $conn "" ""
 }
 
 # conn_onerror: Run when an error happens on a connection.
 #       $conn = full label for the connection
-#       $sub = for connections that have more than one fd, indicate the one
+#       $sub = since some connections might have more than one handle associated
+#           with them, indicate which one it is:
+#               c - the connection itself
+#               p - a PTY linked to the connection
 #       $ekws = error keywords, see sockptyr-tcl-api.txt
 #       $emsg = textual error message
 # Could do something fancy, for now it doesn't even display the error
@@ -967,7 +1005,7 @@ proc conn_onerror {conn sub ekws emsg} {
             }
         }
     }
-    # XXX if an error comes in fast the GUI won't update
+    # XXX a fast spew of errors can prevent the GUI from updating
 }
 
 # ptyrun_byebye: Run when a connection set up with "conn_action_ptyrun"
@@ -984,6 +1022,28 @@ proc ptyrun_byebye {conn pty_hdl} {
     sockptyr link $conn_hdls($conn)
     sockptyr close $pty_hdl
     conn_record_status $conn "" ""
+}
+
+# link_byebye: Run when a connection set up with "conn_action_link"
+# is ended for whatever reason, to clean up after it.
+#       $conn = full label for the connection
+#       $conn2 = full label for the connection it's linked to
+proc link_byebye {conn conn2} {
+    dmsg [list link_byebye $conn $conn2]
+
+    global conn_hdls conn_deact
+
+    if {$conn_hdls($conn) ne ""} {
+        sockptyr link $conn_hdls($conn)
+    }
+
+    set conn_deact($conn) ""
+    conn_record_status $conn "" ""
+
+    # and if $conn2 still really exists, remove its status too
+    if {[info exists conn_hdls($conn2)]} {
+        conn_record_status $conn2 "" ""
+    }
 }
 
 # read_and_connect_dir: Read a directory and connect to any sockets in

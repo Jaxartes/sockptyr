@@ -580,6 +580,12 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
     for (i = 0; i < argc; ++i) {
         olinked[i] = conns[i]->linked;
         if (conns[i]->linked) {
+            conns[i]->buf_empty = 1;
+            conns[i]->buf_in = 0;
+            conns[i]->buf_out = 0;
+            conns[i]->linked->u.u_conn.buf_empty = 1;
+            conns[i]->linked->u.u_conn.buf_in = 0;
+            conns[i]->linked->u.u_conn.buf_out = 0;
             conns[i]->linked->u.u_conn.linked = NULL;
             conns[i]->linked = NULL;
         }
@@ -1686,6 +1692,12 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
     int result;
 #endif
     int i;
+
+#if 0
+    fprintf(stderr, "sockptyr_conn_event(%d); %s = '%s'\n",
+            (int)hdl->num, errkws ? "onerror" : "onclose",
+            errkws ? conn->onerror : conn->onclose);
+#endif
 
     if (errkws == NULL) {
         if (conn->onclose == NULL) return; /* no handler */
