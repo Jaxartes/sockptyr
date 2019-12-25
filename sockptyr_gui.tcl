@@ -585,7 +585,7 @@ proc conn_add {label ok source he qual} {
 # reposition all connections.
 proc conn_pos {} {
     global conns conn_tags listwidth bgcolor bgcolor2
-    global conn_lord conn_byord conn_count
+    global conn_lord conn_byord conn_count conn_sel
 
     set y 0
     set i 0
@@ -598,8 +598,10 @@ proc conn_pos {} {
         .conns.can coords $tag.r 0 $nby1 $listwidth $nby2
         set conn_lord($conn) $i
         set conn_byord($i) $conn
-        .conns.can itemconfigure $tag.r \
-            -fill [expr {($conn_lord($conn) & 1) ? $bgcolor2 : $bgcolor}]
+        if {$conn_sel ne $conn} {
+            .conns.can itemconfigure $tag.r \
+                -fill [expr {($conn_lord($conn) & 1) ? $bgcolor2 : $bgcolor}]
+        }
         set y [expr {$y + $nby2 - $nby1}]
         incr i
     }
