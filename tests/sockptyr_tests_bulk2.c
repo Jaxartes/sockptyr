@@ -469,6 +469,7 @@ static void *slot_main(void *sl_voidp)
         /* Send and receive data on the connected socket, until we
          * decide to do otherwise.
          */
+        cmd_close_cont_mon = cmd_close_cont;
         for (;;) {
             /* see if we're going to stop */
             gettimeofday(&tnow, NULL);
