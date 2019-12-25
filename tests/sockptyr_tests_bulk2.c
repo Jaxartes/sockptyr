@@ -334,6 +334,7 @@ static void *slot_main(void *sl_voidp)
     int idle, first = 1;
     struct dpds_consumer_state dcs;
     struct stat sb;
+    char tbuf[64]; /* formatting time */
 
     memset(&pfd, 0, sizeof(pfd));
 
@@ -452,6 +453,10 @@ static void *slot_main(void *sl_voidp)
                 tend.tv_sec += 1;
             }
         } while (nrand48(sl->xsubi) & 16);
+
+        strftime(tbuf, sizeof(tbuf), "%H:%M:%S", localtime(&tend.tv_sec));
+        tmsg("On %s/%s planning to read/write until %s.%06u",
+             sockdir, sname, tbuf, (unsigned)tend.tv_usec);
 
         /* Send and receive data on the connected socket, until we
          * decide to do otherwise.
