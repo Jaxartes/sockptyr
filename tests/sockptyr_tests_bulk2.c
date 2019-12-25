@@ -43,6 +43,11 @@
  *      "typical" time (in seconds) between socket creation/removal
  *      "typical" delay (in seconds) between socket()/bind() & listen()
  *      "typical" delay (in seconds) before accept()
+ *
+ * Some simple commands are taken on standard input:
+ *      s -- report status of sockets that are in read/write stage
+ *      c -- close all sockets that are in read/write stage, then continue
+ * In practice the characters need to be on lines by themselves.
  */
 
 #include <stdio.h>
@@ -150,7 +155,8 @@ void fsleep(float s)
     }    
 }
 
-static char status_ctl = 0; /* incremented when a status report is wanted */
+static char cmd_status = 0; /* incremented by status report command */
+static char cmd_close_cont = 0; /* incremented by close & continue command */
 
 /** ** ** detectable pseudorandom data sequences ** ** **/
 
@@ -318,14 +324,15 @@ static void *slot_main(void *sl_voidp)
     struct slot *sl = sl_voidp;
     long name_ctr = 0; /* counter for naming sockets */
     char sname[80]; /* socket filename */
-    int lsok; /* listening socket */
-    int csok; /* connected socket */
+    int lsok = -1; /* listening socket */
+    int csok = -1; /* connected socket */
     struct sockaddr_un aun;
     struct pollfd pfd;
     int rv, f_flags, todo;
     struct timeval tnow, tend;
     float f;
-    char status_ctl_mon = 0;
+    char cmd_status_mon = 0;        /* thread's last handled cmd_status */
+    char cmd_close_cont_mon = 0;    /* thread's last handled cmd_close_cont */
     u_int8_t rbuf[4096], wbuf[4096]; /* read & write buffers */
     int rgot, wgot; /* bytes in read & write buffers currently */
     long long received, sent; /* bytes total received/sent on this socket */
@@ -337,6 +344,7 @@ static void *slot_main(void *sl_voidp)
     char tbuf[64]; /* formatting time */
 
     memset(&pfd, 0, sizeof(pfd));
+    sname[0] = '\0';
 
     for (;;) {
         /* wait a bit before creating socket -- except the first time half
@@ -472,11 +480,16 @@ static void *slot_main(void *sl_voidp)
                 break;
             }
 
-            /* see if we've been called on to report status */
-            if (status_ctl_mon != status_ctl) {
-                status_ctl_mon = status_ctl;
+            /* see if we've been called on to do something */
+            if (cmd_status_mon != cmd_status) {
+                cmd_status_mon = cmd_status;
                 tmsg("%s: received %lld bytes, sent %lld bytes",
                      sname, (long long)received, (long long)sent);
+            }
+            if (cmd_close_cont_mon != cmd_close_cont) {
+                /* close connection, go back around */
+                cmd_close_cont_mon = cmd_close_cont;
+                break;
             }
 
             /* receive data if we can */
@@ -557,10 +570,14 @@ static void *slot_main(void *sl_voidp)
         tmsg("Closing %s/%s", sockdir, sname);
         close(lsok);
         close(csok);
+        lsok = csok = -1;
         snprintf(aun.sun_path, sizeof(aun.sun_path),
                  "%s/%s", sockdir, sname);
         unlink(aun.sun_path);
+        sname[0] = '\0';
     }
+
+    return(NULL);
 }
 
 /** ** ** main program ** ** **/
@@ -644,13 +661,20 @@ int main(int argc, char **argv)
         if (ch == 3) {
             /* this is not how we expect to get control-C, but hey */
             break;
+        } else if (ch == 's') {
+            /* trigger a status report */
+            ++cmd_status;
+        } else if (ch == 'c') {
+            /* trigger closure of all connections, but not exit */
+            ++cmd_close_cont;
         } else if (ch < 0) {
             /* no stdin, just wait forever */
             sleep(432000); /* 5 days */
         } else {
-            /* newline (and whatever else): trigger a status report */
-            ++status_ctl;
+            /* unrecognized, just ignore */
         }
     }
+
+    return(0);
 }
 
