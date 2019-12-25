@@ -34,3 +34,9 @@ Usage examples for each (run from the parent directory):
 
     sockptyr.cfg.tests_bulk2:
         config file for use with sockptyr_tests_bulk2.c
+
+    sockptyr_tests_cbulk2.tcl:
+        tclsh tests/sockptyr_tests_cbulk2.tcl ./sockptyr.so ./sockptyr_test_env_d
+        acts as the counterpart to sockptyr_tests_bulk2.c for tests
+        not involving the GUI: it detects sockets, connects to them,
+        and links them.  Needs inotify.
