@@ -1136,7 +1136,7 @@ proc read_and_connect_inotify {path label retries_list flags cookie name} {
         }
         if {[catch {file type $fullpath} t] || $t ne "socket"} {
             # not a socket, skip
-            puts stderr "ignoring new file $name is it's not a socket"
+            puts stderr "ignoring new file $name as it's not a socket"
             return
         }
 
