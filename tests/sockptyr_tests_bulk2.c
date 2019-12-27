@@ -445,6 +445,9 @@ static void *slot_main(void *sl_voidp)
         txseq = dcs.seq = jrand48(sl->xsubi);
         txpos = dcs.pos = 0;
 
+        tmsg("Connection on %s/%s will generate 0x%08lx/...",
+             sockdir, sname, (unsigned long)txseq);
+
         /* Figure out how long we're going to be sending and receiving
          * data on the socket before closing it.
          */
