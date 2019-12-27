@@ -569,10 +569,20 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
     for (i = 0; i < argc; ++i) {
         hdls[i] = sockptyr_lookup_handle(sd, argv[i]);
         if (hdls[i] == NULL || hdls[i]->usage != usage_conn) {
-            snprintf(buf, sizeof(buf), "handle %s is not a connection handle",
-                     argv[i]);
-            Tcl_SetResult(interp, buf, TCL_VOLATILE);
-            return(TCL_ERROR);
+            if (argc >= 2) {
+                snprintf(buf, sizeof(buf),
+                         "handle %s is not a connection handle",
+                         argv[i]);
+                Tcl_SetResult(interp, buf, TCL_VOLATILE);
+                return(TCL_ERROR);
+            } else {
+                /*
+                 * We're being told to remove a link from a handle that
+                 * isn't linked to anything, because it isn't a connection.
+                 * Thus: do nothing
+                 */
+                return(TCL_OK);
+            }
         }
         conns[i] = &(hdls[i]->u.u_conn);
     }
@@ -646,10 +656,20 @@ static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
 
     hdl = sockptyr_lookup_handle(sd, argv[0]);
     if (hdl == NULL || hdl->usage != usage_conn) {
-        Tcl_SetObjResult(interp,
-                         Tcl_ObjPrintf("handle %s is not a connection handle",
-                                       argv[0]));
-        return(TCL_ERROR);
+        if (argc >= 2) {
+            Tcl_SetObjResult(interp,
+                             Tcl_ObjPrintf("handle %s"
+                                           " is not a connection handle",
+                                           argv[0]));
+            return(TCL_ERROR);
+        } else {
+            /*
+             * We're being told to remove a handler from a handle that
+             * doesn't have one, because it isn't a connection.
+             * Thus: do nothing
+             */
+            return(TCL_OK);
+        }
     }
 
     resp = isonerror ? &(hdl->u.u_conn.onerror) : &(hdl->u.u_conn.onclose);

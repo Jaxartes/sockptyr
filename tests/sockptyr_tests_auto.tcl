@@ -118,6 +118,31 @@ update
 puts stderr "Done"
 
 puts stderr ""
+puts stderr "Connection ops on non-connection handle"
+if {$use_inotify} {
+    set nchdl [sockptyr inotify . IN_CREATE list]
+} else {
+    set nchdl [lindex $pty_handles 0]
+}
+
+foreach what {link onclose onerror} {
+    foreach {opa oph opx} {1 Adding 1 0 Removing 0} {
+        puts stderr "\t$oph $what on non-connection handle $nchdl"
+        set cmd [list sockptyr]
+        lappend cmd $what $nchdl
+        if {$opa} {
+            lappend cmd wxyz
+        }
+        puts stderr "\tCommand: $cmd"
+        set rv [catch $cmd res]
+        puts stderr "\tResult: $rv $res"
+        if {(!!$rv) != $opx} {
+            error "Unexpected result!"
+        }
+    }
+}
+
+puts stderr ""
 puts stderr "Running handle debug..."
 array set dbg_handles [sockptyr dbg_handles]
 foreach n [lsort [array names dbg_handles]] {
