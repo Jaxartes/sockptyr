@@ -84,14 +84,12 @@
 #           see above.  May be overridden on a per-source basis.
 
 set config(DIR:source) {directory ./sockptyr_test_env_d 20}
-set config(DIR:button:0:text) Terminal
-set config(DIR:button:0:action) {conn_action_ptyrun {xterm -fn 8x16 -geometry 80x24 -fg cyan -bg black -cr cyan -sb -T "%l" -n "%l" -e picocom %p &} Terminal T}
+set config(DIR:button:0:text) Remove
+set config(DIR:button:0:action) conn_action_remove
+set config(DIR:button:0:always) 1
 set config(DIR:button:1:text) "Mark for link"
 set config(DIR:button:1:action) conn_action_mark
 set config(DIR:button:2:text) "Link to marked"
 set config(DIR:button:2:action) conn_action_link
-set config(DIR:button:3:text) Remove
-set config(DIR:button:3:action) conn_action_remove
-set config(DIR:button:3:always) 1
 set config(verbosity) 1
 set config(directory_retries) {250 500 1250}
