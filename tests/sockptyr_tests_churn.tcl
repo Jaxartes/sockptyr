@@ -486,5 +486,6 @@ while {$octr < $nctr} {
     del $octr
     incr octr
 }
+puts stderr "Exiting."
 exit 0
 

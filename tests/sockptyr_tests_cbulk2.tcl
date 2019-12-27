@@ -157,8 +157,6 @@ proc hdl_onclose {path} {
     set hdl $chdl($path)
     unset clnk($path)
     unset chdl($path)
-    sockptyr onclose $hdl
-    sockptyr onerror $hdl
     sockptyr close $hdl
 }
 

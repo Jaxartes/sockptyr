@@ -717,8 +717,6 @@ proc conn_del {conn} {
     unset conn_deact($conn)
     if {$conn_hdls($conn) ne ""} {
         # close the connection, it isn't already
-        sockptyr onclose $conn_hdls($conn)
-        sockptyr onerror $conn_hdls($conn)
         sockptyr close $conn_hdls($conn)
     }
     unset conn_hdls($conn)
@@ -956,8 +954,6 @@ proc conn_onclose {conn} {
 
     if {$conn_hdls($conn) ne ""} {
         # get rid of the connection handle
-        sockptyr onclose $conn_hdls($conn)
-        sockptyr onerror $conn_hdls($conn)
         sockptyr close $conn_hdls($conn)
         set conn_hdls($conn) ""
         if {$conn_mark eq $conn} {
@@ -1020,8 +1016,6 @@ proc ptyrun_byebye {conn pty_hdl} {
     global conn_hdls conn_deact
 
     set conn_deact($conn) ""
-    sockptyr onclose $pty_hdl
-    sockptyr link $conn_hdls($conn)
     sockptyr close $pty_hdl
     conn_record_status $conn "" ""
 }
@@ -1035,16 +1029,13 @@ proc link_byebye {conn conn2} {
 
     global conn_hdls conn_deact
 
-    if {$conn_hdls($conn) ne ""} {
-        sockptyr link $conn_hdls($conn)
-    }
-
     set conn_deact($conn) ""
     conn_record_status $conn "" ""
 
-    # and if $conn2 still really exists, remove its status too
-    if {[info exists conn_hdls($conn2)]} {
-        conn_record_status $conn2 "" ""
+    # and if $conn2 still really exists, deal with it too
+    if {[info exists conn_deact($conn2)] && $conn_deact($conn2) ne ""} {
+        uplevel "#0" $conn_deact($conn2)
+        set conn_deact($conn2) ""
     }
 }
 

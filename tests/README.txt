@@ -7,9 +7,6 @@ Usage examples for each (run from the parent directory):
     sockptyr_tests_auto.tcl:
         make -f Makefile.linux test
 
-    sockptyr_tests_bulk.tcl:
-        read comments at top of file before using
-
     sockptyr_tests_churn.tcl:
         tclsh tests/sockptyr_tests_churn.tcl keep 5 10 run 500 hd cleanup hd
         see comments at top of file for more options
@@ -27,9 +24,9 @@ Usage examples for each (run from the parent directory):
         doesn't handle connection closure well
 
     sockptyr_tests_bulk2.c:
-        cc -g -Wall -o sockptyr_tests_bulk2 sockptyr_tests_bulk2.c -lm -lpthread
-        wish sockptyr_gui.c
-        ./sockptyr_tests_bulk2 ./sockptyr_test_env_d 10 300.0 1.0 0.25
+        cc -g -Wall -o tests/sockptyr_tests_bulk2 tests/sockptyr_tests_bulk2.c -lm -lpthread
+        wish sockptyr_gui.tcl
+        ./tests/sockptyr_tests_bulk2 ./sockptyr_test_env_d 10 300.0 1.0 0.25
         use control-C to terminate it
 
     sockptyr.cfg.tests_bulk2:

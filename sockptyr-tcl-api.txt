@@ -120,7 +120,9 @@ Commands:
         defined handler.
 
         Not called when you do "sockptyr close" on the handle, it's only
-        for closes your Tcl code wouldn't have known about.
+        for closes your Tcl code wouldn't have known about.  Either type
+        of close results in the "onclose" and "onerror" handlers being
+        removed, so you don't need to worry about that.
 
     sockptyr onerror $hdl ?$proc?
         When an error occurs on the connection identified by handle $hdl,

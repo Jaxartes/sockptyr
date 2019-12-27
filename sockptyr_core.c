@@ -245,6 +245,7 @@ static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code);
 static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl);
 static void sockptyr_conn_handler(ClientData cd, int mask);
 static void sockptyr_lstn_handler(ClientData cd, int mask);
+static void sockptyr_conn_unlink(struct sockptyr_hdl *hdl);
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
                                 char **errkws, char *errstr);
 static void sockptyr_conn_event_sys(struct sockptyr_hdl *hdl,
@@ -554,7 +555,7 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
                              int argc, const char *argv[])
 {
     struct sockptyr_data *sd = cd;
-    struct sockptyr_hdl *hdls[2], *olinked[2];
+    struct sockptyr_hdl *hdls[2];
     struct sockptyr_conn *conns[2];
     int i;
     char buf[512];
@@ -578,16 +579,8 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
 
     /* unlink them from whatever they were on before */
     for (i = 0; i < argc; ++i) {
-        olinked[i] = conns[i]->linked;
         if (conns[i]->linked) {
-            conns[i]->buf_empty = 1;
-            conns[i]->buf_in = 0;
-            conns[i]->buf_out = 0;
-            conns[i]->linked->u.u_conn.buf_empty = 1;
-            conns[i]->linked->u.u_conn.buf_in = 0;
-            conns[i]->linked->u.u_conn.buf_out = 0;
-            conns[i]->linked->u.u_conn.linked = NULL;
-            conns[i]->linked = NULL;
+            sockptyr_conn_unlink(hdls[i]);
         }
     }
 
@@ -600,9 +593,6 @@ static int sockptyr_cmd_link(ClientData cd, Tcl_Interp *interp,
     /* and update what events they can handle based on the new linkage */
     for (i = 0; i < argc; ++i) {
         sockptyr_register_conn_handler(hdls[i]);
-        if (olinked[i]) {
-            sockptyr_register_conn_handler(olinked[i]);
-        }
     }
 
     return(TCL_OK);
@@ -768,8 +758,7 @@ static void sockptyr_clobber_handle(struct sockptyr_hdl *hdl, int dofree)
                     conn->fd = -1;
                 }
                 if (conn->linked != NULL && conn->linked != hdl) {
-                    conn->linked->u.u_conn.linked = NULL;
-                    sockptyr_register_conn_handler(conn->linked);
+                    sockptyr_conn_unlink(hdl);
                 }
                 ckfree((void *)conn->buf);
                 if (conn->onclose) ckfree(conn->onclose);
@@ -1319,6 +1308,8 @@ static void sockptyr_register_conn_handler(struct sockptyr_hdl *hdl)
     int mask = 0;
     struct sockptyr_conn *conn = &(hdl->u.u_conn);
 
+    /* Sanity checks */
+    assert(hdl->usage == usage_conn);
     if (conn->fd < 0) {
         /* nothing to do */
         return;
@@ -1361,8 +1352,10 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             (int)hdl->num, (int)mask);
 #endif
     if (conn->fd < 0) {
+        sockptyr_register_conn_handler(hdl);
         sockptyr_conn_event(hdl, sockptyr_errkws_bug,
                             "event on closed file descriptor");
+        return;
     }
 
     /* see about receiving on this connection, into its buffer */
@@ -1389,12 +1382,14 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             if (errno == EINTR) {
                 /* not really an error, just let it slide */
             } else {
-                sockptyr_conn_event_sys(hdl, errno, 1);
+                rv = errno;
+                sockptyr_register_conn_handler(hdl);
+                sockptyr_conn_event_sys(hdl, rv, 1);
+                return;
             }
         } else if (rv == 0) {
             /* connection closed */
             sockptyr_conn_event(hdl, NULL, NULL);
-            sockptyr_clobber_handle(hdl, 0);
             return;
         } else {
             /* got something, record it in the buffer */
@@ -1433,11 +1428,16 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             if (errno == EINTR) {
                 /* not really an error, just let it slide */
             } else {
-                sockptyr_conn_event_sys(hdl, errno, 1);
+                rv = errno;
+                sockptyr_register_conn_handler(hdl);
+                sockptyr_conn_event_sys(hdl, rv, 1);
+                return;
             }
         } else if (rv == 0) {
             /* shouldn't have happened */
+            sockptyr_register_conn_handler(hdl);
             sockptyr_conn_event(hdl, sockptyr_errkws_bug, "zero length write");
+            return;
         } else {
             lconn->buf_out += rv;
             if (lconn->buf_out == lconn->buf_sz) {
@@ -1461,8 +1461,9 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
      * handle has changed
      */
     sockptyr_register_conn_handler(hdl);
-    if (conn->linked)
+    if (conn->linked) {
         sockptyr_register_conn_handler(conn->linked);
+    }
 }
 
 #if USE_INOTIFY
@@ -1679,6 +1680,13 @@ static void sockptyr_lstn_handler(ClientData cd, int mask)
  * If it's just closure, 'errkws' and 'errstr' should be NULL.  If it's
  * an error they should be filled in.
  *
+ * This may execute Tcl code that may in turn change the state of the
+ * connection in hard to predict ways.  Be careful when you run this,
+ * especially of what you do afterwards.
+ *
+ * In the "close" case (where 'errkws' and 'errstr' are NULL) this will
+ * also clobber the handle (see sockptyr_clobber_handle()).
+ *
  * 'hdl' is assumed to be a connection, not one of the other things.
  */
 static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
@@ -1704,6 +1712,8 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
 
         cmd = Tcl_NewStringObj(conn->onclose, strlen(conn->onclose));
         Tcl_IncrRefCount(cmd);
+
+        sockptyr_clobber_handle(hdl, 0);
     } else {
         if (conn->onerror == NULL) return; /* no handler */
 
@@ -1737,6 +1747,10 @@ static void sockptyr_conn_event(struct sockptyr_hdl *hdl,
 
 /* sockptyr_conn_event_sys() -- wrapper around sockptyr_conn_event() for
  * errors that come from system calls & set errno.
+ *
+ * This may execute Tcl code that may in turn change the state of the
+ * connection in hard to predict ways.  Be careful when you run this,
+ * especially of what you do afterwards.
  *
  * Parameters:
  *      hdl -- a connection handle
@@ -1774,6 +1788,50 @@ static void sockptyr_conn_event_sys(struct sockptyr_hdl *hdl,
         }
         errkws[ei] = NULL;
         sockptyr_conn_event(hdl, errkws, strerror(e));
+    }
+}
+
+/*
+ * sockptyr_conn_unlink(): Given a connection handler unlink it from
+ * whatever it's linked to and empty their buffers.  (Emptying their
+ * buffers helps in detecting a closed connection.)
+ * If it's linked to itself this function handles it correctly. If it's
+ * not linked to anything, or it isn't a connection and couldn't be linked
+ * to anything, this function handles it correctly (by doing nothing).
+ */
+static void sockptyr_conn_unlink(struct sockptyr_hdl *hdl)
+{
+    struct sockptyr_conn *conns[2];
+    struct sockptyr_hdl *hdls[2];
+    int i;
+
+    hdls[0] = hdl;
+    if (hdl == NULL || hdl->usage != usage_conn) {
+        return;
+    }
+    conns[0] = &(hdls[0]->u.u_conn);
+    hdls[1] = conns[0]->linked;
+
+    if (hdls[1] == NULL || hdl == hdls[1]) {
+        conns[1] = NULL;
+    } else {
+        assert(hdls[1]->usage == usage_conn);
+        conns[1] = &(hdls[1]->u.u_conn);
+    }
+
+    for (i = 0; i < 2; ++i) {
+        if (conns[i]) {
+            conns[i]->buf_empty = 1;
+            conns[i]->buf_in = 0;
+            conns[i]->buf_out = 0;
+            conns[i]->linked = NULL;
+        }
+    }
+
+    for (i = 0; i < 2; ++i) {
+        if (conns[i]) {
+            sockptyr_register_conn_handler(hdls[i]);
+        }
     }
 }
 
