@@ -37,3 +37,9 @@ Usage examples for each (run from the parent directory):
         acts as the counterpart to sockptyr_tests_bulk2.c for tests
         not involving the GUI: it detects sockets, connects to them,
         and links them.  Needs inotify.
+
+    handler_storm_nongui_test.tcl
+        See how fast the Tcl event loop can run, without Tk, by using
+        the "handler-storm" hack.
+        To use: connect another program to ./sockptyr_test_env_l and then
+        close the connection.  Watch the output.
