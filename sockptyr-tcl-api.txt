@@ -52,6 +52,11 @@ Commands:
                     $core is a boolean indicating a core dump happened.
                     $sig is a descriptive string not a signal number
 
+    sockptyr handler-storm $hdl
+        Puts connection $conn into a special mode where, once EOF is received
+        it'll just keep running the handler.  Bad in practice, meant for
+        one single performance test.
+
     sockptyr info
         Returns information about the "sockptyr" software.  The result
         is name value pairs in a list of the form "name value name value ...".

@@ -68,6 +68,8 @@
 static const char *handle_prefix = "sockptyr_";
 static const int buf_sz = 4096;
 
+static long long conn_handler_runs = 0;
+
 #if USE_INOTIFY
 static struct {
     char *name;
@@ -139,6 +141,7 @@ struct sockptyr_conn {
     struct sockptyr_hdl *linked;
 
     char *onclose, *onerror; /* Tcl scripts to handle events */
+    int handler_storm; /* special mode */
 };
 
 struct sockptyr_lstn {
@@ -222,6 +225,8 @@ static int sockptyr_cmd_onclose_onerror(struct sockptyr_data *sd,
 static int sockptyr_cmd_buffer_size(ClientData cd, Tcl_Interp *interp,
                                     int argc, const char *argv[]);
 static int sockptyr_cmd_dbg_handles(ClientData cd, Tcl_Interp *interp);
+static int sockptyr_cmd_handler_storm(ClientData cd, Tcl_Interp *interp,
+                                      int argc, const char *argv[]);
 static void sockptyr_dbg_handles_one(Tcl_Interp *interp,
                                      struct sockptyr_hdl *hdl, int num,
                                      char *err, int errsz);
@@ -326,6 +331,8 @@ static int sockptyr_cmd(ClientData cd, Tcl_Interp *interp,
 #endif /* USE_INOTIFY */
     } else if (!strcmp(argv[1], "dbg_handles")) {
         return(sockptyr_cmd_dbg_handles(cd, interp));
+    } else if (!strcmp(argv[1], "handler-storm")) {
+        return(sockptyr_cmd_handler_storm(cd, interp, argc - 2, argv + 2));
     } else {
         Tcl_SetResult(interp, "unknown subcommand", TCL_STATIC);
         return(TCL_ERROR);
@@ -851,6 +858,7 @@ static void sockptyr_init_conn(struct sockptyr_hdl *hdl, int fd, int code)
     conn->buf_in = conn->buf_out = 0;
     conn->linked = NULL;
     conn->onclose = conn->onerror = NULL;
+    conn->handler_storm = 0;
     sockptyr_register_conn_handler(hdl);
 }
 
@@ -1087,6 +1095,10 @@ static int sockptyr_cmd_info(ClientData cd, Tcl_Interp *interp,
     snprintf(buf, sizeof(buf), "%d", (int)USE_INOTIFY);
     Tcl_AppendElement(interp, buf);
 
+    Tcl_AppendElement(interp, "conn_handler_runs");
+    snprintf(buf, sizeof(buf), "%lld", (long long)conn_handler_runs);
+    Tcl_AppendElement(interp, buf);
+
     return(TCL_OK);
 }
 
@@ -1229,6 +1241,34 @@ static int sockptyr_cmd_close(ClientData cd, Tcl_Interp *interp,
     return(TCL_OK);
 }
 
+/* Tcl command "sockptyr handler-storm" -- enable handler storm mode on
+ * a connection, this is for testing.
+ */
+static int sockptyr_cmd_handler_storm(ClientData cd, Tcl_Interp *interp,
+                                      int argc, const char *argv[])
+{
+    struct sockptyr_data *sd = cd;
+    struct sockptyr_hdl *hdl;
+    struct sockptyr_conn *conn;
+
+    if (argc != 1) {
+        Tcl_SetResult(interp, "usage: sockptyr handler-storm $hdl", TCL_STATIC);
+        return(TCL_ERROR);
+    }
+
+    hdl = sockptyr_lookup_handle(sd, argv[0]);
+    if (hdl == NULL || hdl->usage != usage_conn) {
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf("handle %s is not a connection",
+                                               argv[0]));
+        return(TCL_ERROR);
+    }
+
+    conn = &(hdl->u.u_conn);
+    conn->handler_storm = 1;
+
+    return(TCL_OK);
+}
+
 /* Tcl command "sockptyr buffer_size" -- Set buffer size for future
  * connection handles, in bytes.
  */
@@ -1362,6 +1402,8 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
     struct sockptyr_conn *conn, *lconn;
     int rv, len;
 
+    ++conn_handler_runs;
+
     /* Sanity checks */
     assert(hdl != NULL);
     assert(hdl->usage == usage_conn);
@@ -1409,8 +1451,13 @@ static void sockptyr_conn_handler(ClientData cd, int mask)
             }
         } else if (rv == 0) {
             /* connection closed */
-            sockptyr_conn_event(hdl, NULL, NULL);
-            return;
+            if (conn->handler_storm) {
+                /* ok, make bad things happen */
+                return;
+            } else {
+                sockptyr_conn_event(hdl, NULL, NULL);
+                return;
+            }
         } else {
             /* got something, record it in the buffer */
             conn->buf_empty = 0;
