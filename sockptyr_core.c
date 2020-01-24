@@ -40,9 +40,9 @@
 
 #ifndef USE_TCL_BACKGROUNDEXCEPTION
 #define USE_TCL_BACKGROUNDEXCEPTION 0
-/* Compute with -DUSE_TCL_BACKGROUNDEXCEPTION=1 to enable the use of
+/* Compile with -DUSE_TCL_BACKGROUNDEXCEPTION=1 to enable the use of
  * Tcl_BackgroundException().  A function which I've seen in the documentation
- * but been unable to actually call, so I suspect it's new or something.
+ * but often been unable to actually call, so I suspect it's new or something.
  */
 #endif
 
