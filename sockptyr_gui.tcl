@@ -110,6 +110,9 @@ set winheight 448
 # mark_half_size - half the size of the mark made by conn_action_mark
 set mark_half_size 4
 
+# listpad - padding around list items
+set listpad 3
+
 # bgcolor - background color
 # fgcolor - foreground color
 # bgcolor2 - slightly highlighted background color
@@ -586,6 +589,7 @@ proc conn_add {label ok source he qual} {
 proc conn_pos {} {
     global conns conn_tags listwidth bgcolor bgcolor2
     global conn_lord conn_byord conn_count conn_sel
+    global listpad
 
     set y 0
     set i 0
@@ -593,8 +597,10 @@ proc conn_pos {} {
     foreach conn $conns {
         set tag $conn_tags($conn)
         lassign [.conns.can bbox $tag.c] obx1 oby1 obx2 oby2
-        .conns.can move $tag 0 [expr {$y - $oby1}]
+        .conns.can move $tag 0 [expr {$y - $oby1 + $listpad}]
         lassign [.conns.can bbox $tag.c] nbx1 nby1 nbx2 nby2
+        set nby1 [expr {$nby1 - $listpad}]
+        set nby2 [expr {$nby2 + $listpad}]
         .conns.can coords $tag.r 0 $nby1 $listwidth $nby2
         set conn_lord($conn) $i
         set conn_byord($i) $conn
