@@ -241,6 +241,7 @@ canvas .detail.div -width 8 -height 8
 .detail.div create line -4096 4 4096 4 -fill black
 frame .detail.lbb
 $Button .detail.lbb.x -text "Exit" -command {exit 0}
+$Button .detail.lbb.c -text "Clean" -command global_action_clean
 frame .detail.m
 label .detail.m.l1 -text "No selection" -font lblfont -justify left \
     -wraplength $detwidth
@@ -259,6 +260,7 @@ pack .detail.m -side top -fill both -expand 1
 pack .detail.ubb -side top -fill x
 pack .detail.div -side top -fill x
 pack .detail.lbb.x -side left
+pack .detail.lbb.c -side left
 pack .detail.lbb -side bottom -fill x
 pack .detail -side right -fill both
 
@@ -1168,6 +1170,19 @@ proc connect_with_retries {fullpath label directory name retries_list} {
     } else {
         # failure
         conn_add $label 0 directory $hdl $name
+    }
+}
+
+# global_action_clean: Handles the "Clean" button which removes all
+# closed and failed connections (but not one-sided ones, since you could
+# very well want to reconnect to them).
+proc global_action_clean {} {
+    dmsg [list global_action_clean]
+    global conns conn_hdls conn_cfgs
+    foreach conn $conns {
+        if {$conn_hdls($conn) eq ""} {
+            conn_action_remove $conn_cfgs($conn) $conn
+        }
     }
 }
 

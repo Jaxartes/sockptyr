@@ -68,8 +68,8 @@
 #                   Note: "Loopback" buttons are for testing; in many
 #                   production scenarios they're useless or worse,
 #                   so you may want to leave them out.
-#               conn_action_close $cfglbl $fulllbl
-#                   Close the connection and get rid of it.
+#               conn_action_remove $cfglbl $fulllbl
+#                   Get rid of the connection.
 #               conn_action_mark $cfglbl $fulllbl
 #                   Mark the connection for use with conn_action_link.
 #               conn_action_link $cfglbl $fulllbl
