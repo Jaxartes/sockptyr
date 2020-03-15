@@ -33,7 +33,8 @@ exec /usr/bin/tclsh "$0" ${1+"$@"}
 # This is not the main sockptyr program, for which see sockptyr_gui.tcl.
 # This one is meant for when you don't have a GUI available.
 
-# XXX work in progress: coded, untested
+# XXX work in progress: coded, mostly untested, doesn't yet work
+# XXX see about using bgerror to report Tcl errors
 
 ## ## ## Initialization
 
@@ -80,7 +81,7 @@ set cfg(v) 0            ; # verbose output
 set cfg(retries) {200 300 500 1000 3000} ; # retry connection to new sockets
 
 set opts [list]
-for {set i 0} {$i < $argv} {incr i} {
+for {set i 0} {$i < [llength $argv]} {incr i} {
     set a [lindex $argv $i]
     if {$a eq "--"} {
         # no more options
@@ -142,7 +143,7 @@ foreach {oc ov} $opts {
     }
 }
 
-if {$i < [llength $argv]} {
+if {$i < [llength $argv] - 1} {
     puts stderr "$progname: too many arguments"
     usage
 }
@@ -150,7 +151,8 @@ if {$i >= [llength $argv]} {
     puts stderr "$progname: missing the linksdir argument"
     usage
 }
-if {![llength $cfg(sources)]} {
+set cfg(dir) [lindex $argv end]
+if {![llength $cfg(srcchars)]} {
     puts stderr "$progname: need at least one -c, -l, or -d option"
     usage
 }
@@ -213,13 +215,15 @@ proc linkname {si str} {
 proc add_conn {hdl linkname desc} {
     global cfg
 
+    stampy 4 [list add_conn $hdl $linkname $desc]
+
     # Open a PTY.
     if {[catch {sockptyr open_pty} pty_hdl_path]} {
         stampy 0 "Unable to allocate pty for $desc: $pty_hdl_path"
         sockptyr close $hdl
         return
     }
-    lassign $pty_hdl_path $pty_hdl $pty_path
+    lassign $pty_hdl_path pty_hdl pty_path
     stampy 3 "Allocated pty $pty_path"
 
     # hook up the connection and the pty
@@ -477,5 +481,6 @@ for {set si 0} {$si < [llength $cfg(srcchars)]} {incr si} {
 
 ## ## ## Finally, wait for things to happen and handle them.
 
+stampy 2 "Initialized, now waiting for things to happen"
 vwait forever
 
