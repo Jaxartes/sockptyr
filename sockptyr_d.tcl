@@ -225,6 +225,7 @@ proc add_conn {hdl linkname desc} {
     }
     lassign $pty_hdl_path pty_hdl pty_path
     stampy 3 "Allocated pty $pty_path"
+    stampy 4 "PTY handle $pty_hdl"
 
     # hook up the connection and the pty
     if {[catch {sockptyr link $hdl $pty_hdl} err]} {
@@ -233,7 +234,7 @@ proc add_conn {hdl linkname desc} {
         sockptyr close $pty_hdl
         return
     }
-    stampy 3 "Connected $pty_path to new connection $desc"
+    stampy 3 "Connected $pty_path to new $desc"
 
     # make a symlink
     set linkpath [file join $cfg(dir) $linkname]
@@ -244,7 +245,7 @@ proc add_conn {hdl linkname desc} {
         return
     }
 
-    stampy 1 "$linkname is link for new connection $desc"
+    stampy 1 "$linkname is link for new $desc"
 
     # Now the main activity, of transferring data over the connections,
     # is going to happen in sockptyr_core.c without this script's
