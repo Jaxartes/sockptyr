@@ -33,8 +33,7 @@ exec /usr/bin/tclsh "$0" ${1+"$@"}
 # This is not the main sockptyr program, for which see sockptyr_gui.tcl.
 # This one is meant for when you don't have a GUI available.
 
-# XXX work in progress: coded, mostly untested, doesn't yet work
-# XXX see about using bgerror to report Tcl errors
+# XXX work in progress: coded, only a little bit tested
 
 ## ## ## Initialization
 
@@ -194,6 +193,14 @@ proc stampy {v msg} {
         [clock format $s -format "%Y-%m-%d %H:%M:%S"] $ms $msg]
 }
 
+# bgerror: Report Tcl errors that occur in the background.
+# This won't work well unless sockptyr_core.c was compiled with
+# USE_TCL_BACKGROUNDEXCEPTION=1.
+proc bgerror {args} {
+    stampy 4 "BGE $args"
+    stampy 0 $args
+}
+
 ## ## ## Connection handling
 
 # linkname: Build a link name out of a source identifier $si (counting
@@ -251,10 +258,14 @@ proc add_conn {hdl linkname desc} {
     # is going to happen in sockptyr_core.c without this script's
     # involvement.  If something happens, a handler we register will
     # be called.  Now the time to register those handlers.
-    sockptyr onclose $hdl [close_conn $linkname $pty_path $pty_hdl $hdl c]
-    sockptyr onclose $pty_hdl [close_conn $linkname $pty_path $pty_hdl $hdl p]
-    sockptyr onerror $hdl [close_error $linkname $pty_path $pty_hdl $hdl c]
-    sockptyr onerror $pty_hdl [close_error $linkname $pty_path $pty_hdl $hdl c]
+    sockptyr onclose $hdl \
+        [list close_conn $linkname $pty_path $pty_hdl $hdl c]
+    sockptyr onclose $pty_hdl \
+        [list close_conn $linkname $pty_path $pty_hdl $hdl p]
+    sockptyr onerror $hdl \
+        [list close_error $linkname $pty_path $pty_hdl $hdl c]
+    sockptyr onerror $pty_hdl \
+        [list close_error $linkname $pty_path $pty_hdl $hdl c]
 }
 
 # add_conn_l: Wrapper for add_conn for use with "sockptyr listen"
