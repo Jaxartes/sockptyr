@@ -196,9 +196,15 @@ proc stampy {v msg} {
 # bgerror: Report Tcl errors that occur in the background.
 # This won't work well unless sockptyr_core.c was compiled with
 # USE_TCL_BACKGROUNDEXCEPTION=1.
-proc bgerror {args} {
-    stampy 4 "BGE $args"
-    stampy 0 $args
+proc bgerror {msg} {
+    global errorInfo cfg
+
+    stampy 0 "BG error: $msg"
+    foreach line [split $errorInfo "\n"] {
+        if {$cfg(v) > 1} {
+            puts stderr "ERROR INFO: $line"
+        }
+    }    
 }
 
 ## ## ## Connection handling
@@ -357,10 +363,10 @@ proc connect_with_retries {path linkname retries} {
         # try again
         stampy 3 "Will retry connection to $path"
         after [lindex $retries 0] \
-            [list connect_with_retries $path $linkname [lrane $retries 1 end]]
+            [list connect_with_retries $path $linkname [lrange $retries 1 end]]
     } else {
         # failure
-        stampy "Failed to connect to $path"
+        stampy 0 "Failed to connect to $path"
     }
 }
 
@@ -450,6 +456,9 @@ proc check_dir {si path} {
 
     # bookkeeping for record of what we've already seen
     set _cd_seen($si) [array get nsockets]
+
+    stampy 4 "osockets: [array names osockets]"
+    stampy 4 "nsockets: [array names nsockets]"
 
     # start inotify, if possible; otherwise just schedule to re-scan the
     # directory a little later
