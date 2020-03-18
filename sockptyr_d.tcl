@@ -34,6 +34,8 @@ exec /usr/bin/tclsh "$0" ${1+"$@"}
 # This one is meant for when you don't have a GUI available.
 
 # XXX work in progress: coded, only a little bit tested
+# XXX high CPU utilization seen on linux sometimes
+# XXX on macOS sometimes when I connect to the PTY it gets wedged
 
 ## ## ## Initialization
 
@@ -265,13 +267,11 @@ proc add_conn {hdl linkname desc} {
     # involvement.  If something happens, a handler we register will
     # be called.  Now the time to register those handlers.
     sockptyr onclose $hdl \
-        [list close_conn $linkname $pty_path $pty_hdl $hdl c]
-    sockptyr onclose $pty_hdl \
-        [list close_conn $linkname $pty_path $pty_hdl $hdl p]
+        [list close_conn $linkname $pty_path $pty_hdl $hdl]
     sockptyr onerror $hdl \
-        [list close_error $linkname $pty_path $pty_hdl $hdl c]
+        [list conn_error $linkname $linkname $pty_path $pty_hdl $hdl]
     sockptyr onerror $pty_hdl \
-        [list close_error $linkname $pty_path $pty_hdl $hdl c]
+        [list conn_error $pty_path $linkname $pty_path $pty_hdl $hdl]
 }
 
 # add_conn_l: Wrapper for add_conn for use with "sockptyr listen"
@@ -295,12 +295,10 @@ proc add_conn_l {si hdl empty} {
 #       pty_path -- path of the PTY it's linked to
 #       pty_hdl -- handle of the PTY
 #       hdl -- handle of the connection
-#       what -- which one of the handles this is called on: "p" or "c"
-proc close_conn {linkname pty_path pty_hdl hdl what} {
+proc close_conn {linkname pty_path pty_hdl hdl} {
     global cfg
 
-    set whatpty [expr {($what eq "p") ? " from PTY end" : ""}]
-    stampy 1 "Connection ($linkname) closed$whatpty."
+    stampy 1 "Connection ($linkname, $pty_path) closed."
     if {[catch {file delete [file join $cfg(dir) $linkname]} err]} {
         stampy 0 "Failed to delete $linkname: $err"
         # non fatal error, continue with cleanup
@@ -317,17 +315,17 @@ proc close_conn {linkname pty_path pty_hdl hdl what} {
 #
 # Parameters:
 #   Supplied by the caller to "sockptyr onerror":
+#       onwhat -- printable name of what it was on
 #       linkname -- filename of symbolic link
 #       pty_path -- path of the PTY it's linked to
 #       pty_hdl -- handle of the PTY
 #       hdl -- handle of the connection
-#       what -- which one of the handles this is called on: "p" or "c"
 #   Supplied by "sockptyr onerror" itself:
 #       kws -- list of keywords like "bug", "io", "EPIPE"
 #       msg -- printable message
-proc conn_error {linkname pty_path pty_hdl hdl what kws msg} {
+proc conn_error {onwhat linkname pty_path pty_hdl hdl kws msg} {
     # report the error
-    stampy 0 "Error on $linkname: $msg"
+    stampy 0 "Error on $onwhat: $msg"
 
     # see if it merits disconnecting
     set discon 0
@@ -344,7 +342,7 @@ proc conn_error {linkname pty_path pty_hdl hdl what kws msg} {
 
     if {$discon} {
         stampy 1 "Will close connection due to error"
-        close_conn $linkname $pty_path $pty_hdl $hdl $what
+        close_conn $linkname $pty_path $pty_hdl $hdl
     }
     # YYY consider adding logic to detect a fast spew of errors
 }
