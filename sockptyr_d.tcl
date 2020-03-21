@@ -36,6 +36,7 @@ exec /usr/bin/tclsh "$0" ${1+"$@"}
 # XXX work in progress: coded, only a little bit tested
 # XXX high CPU utilization seen on linux sometimes
 # XXX on macOS sometimes when I connect to the PTY it gets wedged
+# XXX on Linux I've seen an I/O error when disconnected from the PTY and it causes tons of trouble
 
 ## ## ## Initialization
 
